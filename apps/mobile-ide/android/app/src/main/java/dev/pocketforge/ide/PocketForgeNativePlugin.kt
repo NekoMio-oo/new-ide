@@ -51,10 +51,21 @@ class PocketForgeNativePlugin : Plugin() {
     @PluginMethod
     fun getDaemonStatus(call: PluginCall) {
         val alive = daemonProcess?.isAlive == true
+        val pid = if (alive) {
+            // java.lang.Process#pid() exists on OpenJDK 9+ but is absent from
+            // android.jar, so resolve it reflectively where ART provides it.
+            try {
+                daemonProcess!!.javaClass.getMethod("pid").invoke(daemonProcess) as? Int ?: 0
+            } catch (_: Exception) {
+                0
+            }
+        } else {
+            0
+        }
         val ret = JSObject().apply {
             put("running", alive)
             put("port", daemonPort)
-            put("pid", if (alive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) daemonProcess!!.pid() else 0)
+            put("pid", pid)
         }
         call.resolve(ret)
     }
