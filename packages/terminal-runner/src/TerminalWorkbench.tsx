@@ -56,6 +56,16 @@ export const TerminalWorkbench: React.FC<TerminalWorkbenchProps> = ({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const activeSessionRef = useRef<string | null>(null);
   activeSessionRef.current = activeSessionId;
+  const unsubsRef = useRef<Map<string, () => void>>(new Map());
+
+  const subscribeSession = (sessionId: string) => {
+    const unsub = bridge.pty.onData(sessionId, (chunk) => {
+      if (activeSessionRef.current === sessionId) {
+        termRef.current?.write(chunk);
+      }
+    });
+    unsubsRef.current.set(sessionId, unsub);
+  };
 
   // Mount xterm.js terminal
   useEffect(() => {
@@ -110,17 +120,15 @@ export const TerminalWorkbench: React.FC<TerminalWorkbenchProps> = ({
     }
 
     // Spawn initial PTY session
-    let unsubPty: (() => void) | null = null;
     void bridge.pty.createSession(projectRoot, term.cols || 80, term.rows || 24).then((info) => {
       setSessions([info]);
       setActiveSessionId(info.id);
-      unsubPty = bridge.pty.onData(info.id, (chunk) => {
-        term.write(chunk);
-      });
+      subscribeSession(info.id);
     });
 
     return () => {
-      unsubPty?.();
+      for (const unsub of unsubsRef.current.values()) unsub();
+      unsubsRef.current.clear();
       dataDispose.dispose();
       resizeObserver?.disconnect();
       term.dispose();
@@ -142,16 +150,14 @@ export const TerminalWorkbench: React.FC<TerminalWorkbenchProps> = ({
     setSessions((prev) => [...prev, info]);
     setActiveSessionId(info.id);
     termRef.current?.clear();
-    bridge.pty.onData(info.id, (chunk) => {
-      if (activeSessionRef.current === info.id) {
-        termRef.current?.write(chunk);
-      }
-    });
+    subscribeSession(info.id);
   };
 
   const handleKillActive = async () => {
     if (!activeSessionId || sessions.length <= 1) return;
     await bridge.pty.killSession(activeSessionId);
+    unsubsRef.current.get(activeSessionId)?.();
+    unsubsRef.current.delete(activeSessionId);
     const remaining = sessions.filter((s) => s.id !== activeSessionId);
     setSessions(remaining);
     setActiveSessionId(remaining[0]?.id ?? null);

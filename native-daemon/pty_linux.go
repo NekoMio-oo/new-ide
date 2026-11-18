@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -182,7 +183,11 @@ func (s *PTYSession) readLoop() {
 			for _, ch := range s.subs {
 				select {
 				case ch <- chunk:
-				default:
+				case <-time.After(750 * time.Millisecond):
+					// Extremely slow consumer (dead WS peer): drop this chunk
+					// instead of silently losing every burst beyond the old
+					// 64-slot non-blocking buffer, while still never stalling
+					// PTY reads for other subscribers indefinitely.
 				}
 			}
 			s.mu.RUnlock()
@@ -222,7 +227,7 @@ func (s *PTYSession) Subscribe() (int, <-chan string) {
 	defer s.mu.Unlock()
 	id := s.nextSub
 	s.nextSub++
-	ch := make(chan string, 64)
+	ch := make(chan string, 512)
 	s.subs[id] = ch
 	return id, ch
 }

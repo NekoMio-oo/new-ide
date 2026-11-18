@@ -69,6 +69,7 @@ export class BrowserFSProvider implements FSProvider {
   private files = new Map<string, { data: Uint8Array; updatedAt: number }>();
   private dirs = new Set<string>();
   private listeners = new Set<(changedPath: string) => void>();
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(seedTemplates = true) {
     const loaded = this.loadFromStorage();
@@ -79,6 +80,11 @@ export class BrowserFSProvider implements FSProvider {
         }
       }
       this.persistToStorage();
+    }
+    // Flush any debounced snapshot when the page is hidden or closed, so the
+    // last ~300ms of edits are not lost on app exit.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', () => this.flushPendingPersist());
     }
   }
 
@@ -153,8 +159,26 @@ export class BrowserFSProvider implements FSProvider {
     }
   }
 
+  // Debounce full-workspace serialization: persistToStorage stringifies every
+  // file, so running it per keystroke made each edit O(total workspace size).
+  private schedulePersist(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistToStorage();
+    }, 300);
+  }
+
+  private flushPendingPersist(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+      this.persistToStorage();
+    }
+  }
+
   private emit(path: string): void {
-    this.persistToStorage();
+    this.schedulePersist();
     for (const cb of this.listeners) cb(path);
   }
 
@@ -296,6 +320,14 @@ export class BrowserFSProvider implements FSProvider {
         if (k.startsWith(src + '/')) {
           this.files.delete(k);
           this.setFileSync(dst + k.slice(src.length), v.data);
+        }
+      }
+      // Migrate nested directory entries too, otherwise the tree keeps
+      // showing stale empty dirs under the old path after a rename.
+      for (const d of Array.from(this.dirs)) {
+        if (d.startsWith(src + '/')) {
+          this.dirs.delete(d);
+          this.dirs.add(dst + d.slice(src.length));
         }
       }
     }
@@ -916,7 +948,7 @@ export class BrowserRunnerProvider implements RunnerProvider {
           exitCode = 1;
           emitErr(`\x1b[31m${syntaxErr.replace(/\n/g, '\r\n')}\x1b[0m`);
         } else {
-          stdout = extractCoutOrPrintlnOutput(src, 'PocketForge C/C++ 编译运行完成 (exit 0)');
+          stdout = `[SIMULATED] ${extractCoutOrPrintlnOutput(src, 'PocketForge C/C++ 模拟运行完成 (exit 0)')}`;
           emitOut(stdout.replace(/\n/g, '\r\n'));
         }
       } else if (profile.ecosystem === 'rust' || profile.ecosystem === 'go') {
@@ -933,7 +965,7 @@ export class BrowserRunnerProvider implements RunnerProvider {
           exitCode = 1;
           emitErr(`\x1b[31m${syntaxErr.replace(/\n/g, '\r\n')}\x1b[0m`);
         } else {
-          stdout = extractCoutOrPrintlnOutput(src, `PocketForge ${profile.ecosystem.toUpperCase()} 构建成功`);
+          stdout = `[SIMULATED] ${extractCoutOrPrintlnOutput(src, `PocketForge ${profile.ecosystem.toUpperCase()} 模拟构建成功`)}`;
           emitOut(stdout.replace(/\n/g, '\r\n'));
         }
       } else if (profile.ecosystem === 'android-apk') {
@@ -945,19 +977,26 @@ export class BrowserRunnerProvider implements RunnerProvider {
           );
         }
         const steps = [
-          '[1/4] aapt2 compile & link AndroidManifest.xml + res/ ... OK',
-          '[2/4] kotlinc -jvm-target 17 MainActivity.kt ... OK',
-          '[3/4] d8 --min-api 26 classes.dex ... OK',
-          '[4/4] apksigner sign --ks debug.keystore build/outputs/app-debug.apk ... OK',
+          '[SIMULATED] [1/4] aapt2 compile & link AndroidManifest.xml + res/ ... OK',
+          '[SIMULATED] [2/4] kotlinc -jvm-target 17 MainActivity.kt ... OK',
+          '[SIMULATED] [3/4] d8 --min-api 26 classes.dex ... OK',
+          '[SIMULATED] [4/4] apksigner sign --ks debug.keystore build/outputs/app-debug.apk ... OK',
         ];
         stdout = steps.join('\n') + '\n';
         artifactApkPath = `${profile.cwd}/build/outputs/app-debug.apk`;
+        // Browser sandbox cannot run aapt2/kotlinc: write a clearly-labelled
+        // marker file (NOT an installable APK) so the artifact flow stays
+        // demo-able without pretending to be a real zip/APK.
         await this.fs.writeFile(
           artifactApkPath,
-          `PK\x03\x04PocketForge-Signed-APK:${profile.cwd}:${new Date().toISOString()}`
+          `PocketForge SIMULATED build marker (not an installable APK)\n` +
+            `project: ${profile.cwd}\n` +
+            `generatedAt: ${new Date().toISOString()}\n`
         );
         emitOut(`\x1b[32m${stdout.replace(/\n/g, '\r\n')}\x1b[0m`);
-        emitOut(`\x1b[36m✓ 已生成可安装 APK: ${artifactApkPath}\x1b[0m\r\n`);
+        emitOut(
+          `\x1b[36m[SIMULATED] 模拟构建产物已写入: ${artifactApkPath}（浏览器沙箱模式不产出真实 APK）\x1b[0m\r\n`
+        );
       }
     } catch (err) {
       exitCode = 1;
@@ -1021,17 +1060,10 @@ function checkBraceAndMainSyntax(
 function extractCoutOrPrintlnOutput(src: string, fallback: string): string {
   const rustPrint = src.match(/println!\(\s*"([^"]+)"(?:\s*,\s*([^)]+))?\)/);
   if (rustPrint) {
-    // Handle our 3^10 demo or generic string nicely
-    if (src.includes('fast_pow(3, 10)')) {
-      return rustPrint[1].replace('{}', String(Math.pow(3, 10))) + '\n';
-    }
     return rustPrint[1].replace('{}', rustPrint[2] ?? '') + '\n';
   }
   const cppCout = src.match(/std::cout\s*<<\s*"([^"]+)"/);
   if (cppCout) {
-    if (src.includes('10, 20, 30, 40, 50')) {
-      return `${cppCout[1]}150\n`;
-    }
     return `${cppCout[1]}\n`;
   }
   return fallback + '\n';

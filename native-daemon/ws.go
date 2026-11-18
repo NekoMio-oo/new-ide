@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 const wsMagicGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -115,6 +116,10 @@ func (ws *WSConn) WriteTextFrame(msg string) error {
 func (ws *WSConn) writeFrame(opcode byte, payload []byte) error {
 	ws.writeM.Lock()
 	defer ws.writeM.Unlock()
+
+	// Bound writes so a stalled peer cannot block the PTY forwarding loop
+	// forever (which would otherwise backpressure the whole session).
+	_ = ws.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 	var header []byte
 	header = append(header, 0x80|opcode) // FIN + opcode

@@ -27,11 +27,16 @@ func main() {
 		tcDir = filepath.Join(home, ".toolchains")
 	}
 
-	srv := NewDaemonServer(wsDir, tcDir, time.Duration(*lspIdleSec)*time.Second)
+	daemon := NewDaemonServer(wsDir, tcDir, time.Duration(*lspIdleSec)*time.Second)
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 	log.Printf("[PocketForge Daemon] listening on http://%s (workspace=%s)", addr, wsDir)
 
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           daemon.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("daemon exited: %v", err)
 	}
 }
