@@ -1,0 +1,120 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web (typecheck, test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit & component tests
+        run: npm test
+
+      - name: Build offline web bundle
+        run: npm run build
+
+      - name: Upload web dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketforge-web-dist
+          path: apps/mobile-ide/dist/
+          if-no-files-found: error
+
+  daemon:
+    name: Native daemon (test + cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: native-daemon/go.sum
+
+      - name: Check formatting
+        working-directory: native-daemon
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+      - name: Vet
+        working-directory: native-daemon
+        run: go vet ./...
+
+      - name: Tests (real PTY + tar-slip guard + LSP reaping)
+        working-directory: native-daemon
+        run: go test -v ./...
+
+      - name: Cross-compile Android daemon (arm64-v8a + x86_64)
+        run: sh ./scripts/build-native-daemon.sh
+
+      - name: Upload daemon binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: libide-daemon-android
+          path: |
+            apps/mobile-ide/android/app/src/main/jniLibs/arm64-v8a/libide_daemon.so
+            apps/mobile-ide/android/app/src/main/jniLibs/x86_64/libide_daemon.so
+          if-no-files-found: error
+
+  android-apk:
+    name: Android APK (debug)
+    runs-on: ubuntu-latest
+    needs: [web, daemon]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build offline web bundle
+        run: npm run build
+
+      - name: Sync web assets into Capacitor Android host
+        working-directory: apps/mobile-ide
+        run: npx cap sync android
+
+      - name: Inject freshly built daemon binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: libide-daemon-android
+          path: apps/mobile-ide/android/app/src/main/jniLibs/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Assemble debug APK
+        working-directory: apps/mobile-ide/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketforge-android-debug-apk
+          path: apps/mobile-ide/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
