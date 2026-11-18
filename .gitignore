@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+.vite/
+.idea/
+*.tsbuildinfo
+*.log
+.DS_Store
+apps/mobile-ide/android/.gradle/
+apps/mobile-ide/android/app/build/
+native-daemon/bin/

@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@pocketforge/runtime-bridge": ["packages/runtime-bridge/src/index.ts"],
+      "@pocketforge/editor-engine": ["packages/editor-engine/src/index.ts"],
+      "@pocketforge/terminal-runner": ["packages/terminal-runner/src/index.ts"],
+      "@pocketforge/preview-devtools": ["packages/preview-devtools/src/index.ts"],
+      "@pocketforge/git-workbench": ["packages/git-workbench/src/index.ts"],
+      "@pocketforge/dev-toolbox": ["packages/dev-toolbox/src/index.ts"],
+      "@pocketforge/ai-copilot": ["packages/ai-copilot/src/index.ts"],
+      "@pocketforge/workbench-ui": ["packages/workbench-ui/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/*/src",
+    "packages/*/src",
+    "vitest.config.ts"
+  ]
+}
