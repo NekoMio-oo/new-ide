@@ -6,6 +6,7 @@ import type {
   PTYSessionInfo,
   RunProfile,
   RunResult,
+  RunnerProvider,
   RuntimeBridge,
 } from './types';
 
@@ -93,30 +94,17 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
   private fallback = new BrowserWasmRuntimeBridge(true);
   private daemonOrigin = DEFAULT_DAEMON_ORIGIN;
   private daemonPty: DaemonPTYProvider;
+  private runnerImpl: RunnerProvider;
 
   constructor(daemonOrigin = DEFAULT_DAEMON_ORIGIN) {
     this.daemonOrigin = daemonOrigin;
     this.daemonPty = new DaemonPTYProvider(daemonOrigin);
-  }
-
-  get fs() {
-    return this.fallback.fs;
-  }
-
-  get git() {
-    return this.fallback.git;
-  }
-
-  get toolchains() {
-    return this.fallback.toolchains;
-  }
-
-  get pty(): PTYProvider {
-    return this.daemonPty;
-  }
-
-  get runner() {
-    return {
+    // Build the runner delegate ONCE. Returning a fresh object from a getter
+    // broke React consumers that key useCallback/useEffect deps on
+    // `bridge.runner` (e.g. PocketWorkbench loadActiveFile): every render got
+    // a new identity, the effect re-fired, setState produced a new array ->
+    // infinite re-render loop that froze the whole UI in native mode.
+    this.runnerImpl = {
       detectRunProfiles: (projectRoot: string, activeFile: string | null) =>
         this.fallback.runner.detectRunProfiles(projectRoot, activeFile),
       execute: async (
@@ -162,6 +150,26 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
         }
       },
     };
+  }
+
+  get fs() {
+    return this.fallback.fs;
+  }
+
+  get git() {
+    return this.fallback.git;
+  }
+
+  get toolchains() {
+    return this.fallback.toolchains;
+  }
+
+  get pty(): PTYProvider {
+    return this.daemonPty;
+  }
+
+  get runner(): RunnerProvider {
+    return this.runnerImpl;
   }
 
   async initialize(): Promise<void> {

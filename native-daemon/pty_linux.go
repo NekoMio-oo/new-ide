@@ -120,9 +120,18 @@ func (m *PTYManager) Create(cwd string, cols, rows uint16) (*PTYSession, error) 
 		return nil, err
 	}
 
+	// Android has no /bin/sh (only /system/bin/sh); the host app puts the
+	// toolchain bin dirs and /system/bin on PATH, so resolve via LookPath
+	// first and keep absolute paths as final fallbacks for desktop Linux.
 	shellBin := os.Getenv("SHELL")
 	if shellBin == "" || !fileExists(shellBin) {
-		shellBin = "/bin/sh"
+		if resolved, err := exec.LookPath("sh"); err == nil {
+			shellBin = resolved
+		} else if fileExists("/system/bin/sh") {
+			shellBin = "/system/bin/sh"
+		} else {
+			shellBin = "/bin/sh"
+		}
 	}
 
 	workDir := m.rootDir

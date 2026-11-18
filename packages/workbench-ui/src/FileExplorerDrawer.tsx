@@ -151,8 +151,8 @@ export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
       {/* Backdrop */}
       <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={onClose} />
 
-      {/* Drawer Panel */}
-      <aside className="relative z-10 w-72 max-w-[85vw] h-full bg-slate-900 border-r border-slate-800 flex flex-col text-slate-200 shadow-2xl">
+      {/* Drawer Panel — pt-safe clears the edge-to-edge status bar overlay */}
+      <aside className="pt-safe relative z-10 w-72 max-w-[85vw] h-full bg-slate-900 border-r border-slate-800 flex flex-col text-slate-200 shadow-2xl">
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800">
           <span className="text-xs font-bold tracking-wide uppercase text-slate-300">
             离线工作区资源管理器

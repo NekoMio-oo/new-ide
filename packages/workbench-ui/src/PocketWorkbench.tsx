@@ -207,8 +207,8 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
 
   return (
     <div className="flex flex-col h-dvh w-screen bg-slate-950 text-slate-100 overflow-hidden select-none">
-      {/* Top Mobile App Bar */}
-      <header className="flex items-center justify-between px-2.5 py-1.5 bg-slate-900 border-b border-slate-800 shrink-0 z-20">
+      {/* Top Mobile App Bar — pt-safe keeps it below the Android 15 edge-to-edge status bar */}
+      <header className="pt-safe flex items-center justify-between px-2.5 py-1.5 bg-slate-900 border-b border-slate-800 shrink-0 z-20">
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
