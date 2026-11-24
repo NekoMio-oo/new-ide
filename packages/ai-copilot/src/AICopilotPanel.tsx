@@ -8,8 +8,20 @@ import {
   Eye,
   Trash2,
   KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
 import { UnifiedDiffViewer } from '@pocketforge/git-workbench';
+import {
+  Badge,
+  Button,
+  Chip,
+  IconButton,
+  Notice,
+  Panel,
+  PanelHeader,
+  SelectInput,
+  TextInput,
+} from '@pocketforge/ui-kit';
 import {
   PROVIDER_PRESETS,
   extractFirstCodeBlock,
@@ -32,10 +44,10 @@ interface AICopilotPanelProps {
 }
 
 const QUICK_CHIPS = [
-  { label: '解释当前文件逻辑', prompt: '请用简洁要点解释当前文件的核心逻辑与数据流。' },
+  { label: '解释当前文件', prompt: '请用简洁要点解释当前文件的核心逻辑与数据流。' },
   { label: '排查潜在 Bug', prompt: '请检查当前代码是否存在边界异常、内存或异步隐患，并给出修复后的完整代码。' },
-  { label: '重构与性能优化', prompt: '请在不改变对外行为的前提下优化代码可读性与执行效率，输出完整代码。' },
-  { label: '补充注释与类型', prompt: '请为关键函数和复杂逻辑补充清晰注释与类型定义，输出完整代码。' },
+  { label: '重构与优化', prompt: '请在不改变对外行为的前提下优化代码可读性与执行效率，输出完整代码。' },
+  { label: '补充注释类型', prompt: '请为关键函数和复杂逻辑补充清晰注释与类型定义，输出完整代码。' },
 ];
 
 export const AICopilotPanel: React.FC<AICopilotPanelProps> = ({
@@ -70,12 +82,8 @@ export const AICopilotPanel: React.FC<AICopilotPanelProps> = ({
     setStreamingText('');
 
     try {
-      const fullReply = await streamAICompletion(
-        config,
-        turns,
-        clean,
-        activeFile,
-        (partial) => setStreamingText(partial)
+      const fullReply = await streamAICompletion(config, turns, clean, activeFile, (partial) =>
+        setStreamingText(partial)
       );
       const codeBlock = extractFirstCodeBlock(fullReply);
       const assistantTurn: ChatTurn = {
@@ -113,10 +121,29 @@ export const AICopilotPanel: React.FC<AICopilotPanelProps> = ({
 
   const handleVoiceInput = () => {
     const SpeechRec =
-      (window as unknown as { SpeechRecognition?: new () => { lang: string; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; start: () => void }; webkitSpeechRecognition?: new () => { lang: string; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; start: () => void } })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => { lang: string; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; start: () => void } })
-        .webkitSpeechRecognition;
+      (
+        window as unknown as {
+          SpeechRecognition?: new () => {
+            lang: string;
+            onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
+            start: () => void;
+          };
+          webkitSpeechRecognition?: new () => {
+            lang: string;
+            onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
+            start: () => void;
+          };
+        }
+      ).SpeechRecognition ||
+      (
+        window as unknown as {
+          webkitSpeechRecognition?: new () => {
+            lang: string;
+            onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
+            start: () => void;
+          };
+        }
+      ).webkitSpeechRecognition;
     if (!SpeechRec) {
       setInput((prev) => prev + ' 请帮我检查并优化当前文件的异常处理 ');
       return;
@@ -131,254 +158,270 @@ export const AICopilotPanel: React.FC<AICopilotPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-200 overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-purple-400" />
-          <span className="text-xs font-semibold">AI 随身编程助手</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
-            {config.model}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {turns.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setTurns([])}
-              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400"
-              title="清空会话"
+    <Panel>
+      <PanelHeader
+        title="AI 随身编程助手"
+        subtitle={config.model}
+        leading={<Sparkles size={15} className="shrink-0 text-tertiary" />}
+        actions={
+          <>
+            {turns.length > 0 ? (
+              <IconButton label="清空会话" size="sm" onClick={() => setTurns([])}>
+                <Trash2 size={14} />
+              </IconButton>
+            ) : null}
+            <Button
+              size="sm"
+              variant={config.apiKey ? 'ghost' : 'tonal'}
+              icon={<Settings size={13} />}
+              onClick={() => setShowSettings((v) => !v)}
+              data-testid="ai-config-btn"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowSettings((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${
-              config.apiKey ? 'bg-slate-800 text-emerald-300' : 'bg-purple-600/25 text-purple-300 border border-purple-500/40'
-            }`}
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>API 配置</span>
-          </button>
-        </div>
-      </div>
+              API 配置
+            </Button>
+          </>
+        }
+      />
 
-      {/* Collapsible Multi-Provider API Settings */}
-      {showSettings && (
-        <div className="p-3 bg-slate-900/95 border-b border-slate-800 space-y-2.5 text-xs shrink-0">
+      {showSettings ? (
+        <div className="max-h-[46%] shrink-0 space-y-2 overflow-y-auto border-b border-outline-variant bg-surface-container-low p-3 touch-scroll">
           <div className="flex flex-wrap gap-1.5">
-            {PROVIDER_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => {
-                  const next: AIConfig = {
-                    ...config,
-                    protocol: preset.protocol,
-                    baseUrl: preset.baseUrl,
-                    model: preset.defaultModel,
-                  };
-                  setConfig(next);
-                  saveAIConfig(next);
-                }}
-                className="px-2 py-1 rounded bg-slate-800 hover:bg-sky-900/60 text-slate-200 text-[11px]"
-              >
-                {preset.label}
-              </button>
-            ))}
+            {PROVIDER_PRESETS.map((preset) => {
+              const active =
+                config.protocol === preset.protocol && config.baseUrl === preset.baseUrl;
+              return (
+                <Chip
+                  key={preset.label}
+                  selected={active}
+                  onClick={() => {
+                    const next: AIConfig = {
+                      ...config,
+                      protocol: preset.protocol,
+                      baseUrl: preset.baseUrl,
+                      model: preset.defaultModel,
+                    };
+                    setConfig(next);
+                    saveAIConfig(next);
+                  }}
+                >
+                  {preset.label}
+                </Chip>
+              );
+            })}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-0.5">接口协议</label>
-              <select
-                value={config.protocol}
-                onChange={(e) => {
-                  const next = { ...config, protocol: e.target.value as AIConfig['protocol'] };
-                  setConfig(next);
-                  saveAIConfig(next);
-                }}
-                className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5"
-              >
-                <option value="openai-compatible">OpenAI 兼容 (/chat/completions)</option>
-                <option value="gemini">Google Gemini API</option>
-                <option value="claude">Anthropic Claude API</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-0.5">模型名称 (Model ID)</label>
-              <input
-                type="text"
-                value={config.model}
-                onChange={(e) => {
-                  const next = { ...config, model: e.target.value };
-                  setConfig(next);
-                  saveAIConfig(next);
-                }}
-                className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[11px] text-slate-400 mb-0.5">API Base URL</label>
-            <input
-              type="text"
-              value={config.baseUrl}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <SelectInput
+              size="sm"
+              label="接口协议"
+              value={config.protocol}
               onChange={(e) => {
-                const next = { ...config, baseUrl: e.target.value };
+                const next = { ...config, protocol: e.target.value as AIConfig['protocol'] };
                 setConfig(next);
                 saveAIConfig(next);
               }}
-              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="flex items-center gap-1 text-[11px] text-slate-400 mb-0.5">
-              <KeyRound className="w-3 h-3 text-amber-400" />
-              <span>API Key (仅保存在手机本地存储)</span>
-            </label>
-            <input
-              type="password"
-              value={config.apiKey}
+            >
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="claude">Anthropic Claude</option>
+            </SelectInput>
+            <TextInput
+              size="sm"
+              label="模型 ID"
+              value={config.model}
               onChange={(e) => {
-                const next = { ...config, apiKey: e.target.value };
+                const next = { ...config, model: e.target.value };
                 setConfig(next);
                 saveAIConfig(next);
               }}
-              placeholder="sk-... / AIza..."
-              className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1.5 font-mono"
             />
+          </div>
+
+          <TextInput
+            size="sm"
+            label="API Base URL"
+            value={config.baseUrl}
+            onChange={(e) => {
+              const next = { ...config, baseUrl: e.target.value };
+              setConfig(next);
+              saveAIConfig(next);
+            }}
+          />
+
+          <TextInput
+            size="sm"
+            type="password"
+            label={
+              <span className="flex items-center gap-1">
+                <KeyRound size={11} className="text-warning" />
+                API Key（仅保存在本机）
+              </span>
+            }
+            value={config.apiKey}
+            placeholder="sk-... / AIza..."
+            onChange={(e) => {
+              const next = { ...config, apiKey: e.target.value };
+              setConfig(next);
+              saveAIConfig(next);
+            }}
+          />
+
+          <div className="flex items-center gap-1.5 pt-0.5 text-2xs text-on-surface-variant">
+            <ShieldCheck size={12} className="text-success" />
+            密钥仅写入本机存储，不会上传到任何第三方服务。
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* One-Tap Quick Action Pills */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-slate-900 overflow-x-auto no-scrollbar shrink-0">
+      <div className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-outline-variant px-3 py-2 no-scrollbar">
         {QUICK_CHIPS.map((chip) => (
-          <button
-            key={chip.label}
-            type="button"
-            onClick={() => void runPrompt(chip.prompt)}
-            className="px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 hover:border-purple-500/50 text-xs text-slate-300 shrink-0"
-          >
+          <Chip key={chip.label} onClick={() => void runPrompt(chip.prompt)}>
             {chip.label}
-          </button>
+          </Chip>
         ))}
       </div>
 
-      {/* Conversation & Inline Diff Patch Stream */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3 text-xs">
-        {turns.length === 0 && !loading && (
-          <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 text-slate-400 space-y-1.5">
-            <div className="text-slate-200 font-medium">移动端免打字 AI 编程工作流</div>
-            <p>1. 在编辑器选中任意代码片段，可直接点击悬浮胶囊触发解释、查错、优化或单测生成。</p>
-            <p>2. 编译或运行出错时，点击终端顶栏「AI 诊断修复」即可生成单列内联 Diff 补丁一键采纳。</p>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 touch-scroll">
+        {turns.length === 0 && !loading ? (
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2">
+              <Badge tone="info">免打字</Badge>
+              <span className="text-xs text-on-surface-variant">移动端 AI 编程工作流</span>
+            </div>
+            <ol className="space-y-2 border-l border-outline-variant pl-3 text-xs leading-relaxed text-on-surface-variant">
+              <li>
+                <span className="text-on-surface">1.</span> 在编辑器选中代码，下方工具条可直接触发解释、查错、优化或单测。
+              </li>
+              <li>
+                <span className="text-on-surface">2.</span> 运行失败时，终端顶栏「AI 诊断修复」会带着日志与诊断位置发起会话。
+              </li>
+              <li>
+                <span className="text-on-surface">3.</span> 回复中的完整代码可预览 Diff 后一键写入编辑器。
+              </li>
+            </ol>
           </div>
-        )}
+        ) : null}
 
-        {turns.map((turn) => (
-          <div
-            key={turn.id}
-            className={`rounded-xl p-3 space-y-2 ${
-              turn.role === 'user'
-                ? 'bg-sky-950/50 border border-sky-800/50 ml-6'
-                : 'bg-slate-900 border border-slate-800 mr-2'
-            }`}
-          >
-            <div className="text-[11px] font-semibold text-slate-400">
-              {turn.role === 'user' ? '你' : 'PocketForge AI'}
-            </div>
-            <div className="whitespace-pre-wrap leading-relaxed text-slate-200 font-sans">
-              {turn.content}
-            </div>
-
-            {turn.extractedCode && activeFile && (
-              <div className="pt-2 border-t border-slate-800 space-y-2">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDiffPreviewTurnId((cur) => (cur === turn.id ? null : turn.id))
-                    }
-                    className="flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>{diffPreviewTurnId === turn.id ? '收起内联 Diff' : '预览内联 Diff'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await onApplyCodePatch(activeFile.filepath, turn.extractedCode!);
-                      setAppliedTurnIds((prev) => ({ ...prev, [turn.id]: true }));
-                    }}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
-                    data-testid="apply-ai-patch-btn"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>{appliedTurnIds[turn.id] ? '已写入编辑器' : `一键采纳到 ${activeFile.filepath.split('/').pop()}`}</span>
-                  </button>
-                </div>
-
-                {diffPreviewTurnId === turn.id && (
-                  <UnifiedDiffViewer
-                    filepath={activeFile.filepath}
-                    oldText={activeFile.content}
-                    newText={turn.extractedCode}
-                    maxHeightClass="max-h-60"
-                  />
-                )}
+        {turns.map((turn) => {
+          const isUser = turn.role === 'user';
+          return (
+            <div key={turn.id} className={isUser ? 'ml-7' : 'mr-1'}>
+              <div
+                className={`mb-1 flex items-center gap-1.5 text-2xs uppercase tracking-wide ${
+                  isUser ? 'justify-end text-on-surface-variant' : 'text-on-surface-variant'
+                }`}
+              >
+                {isUser ? '你' : 'PocketForge AI'}
               </div>
-            )}
-          </div>
-        ))}
+              <div
+                className={
+                  isUser
+                    ? 'rounded-md bg-secondary-container/60 px-3 py-2 text-sm leading-relaxed text-on-secondary-container'
+                    : 'border-l-2 border-primary/40 pl-2.5 text-sm leading-relaxed text-on-surface'
+                }
+              >
+                <div className="whitespace-pre-wrap break-words selectable">{turn.content}</div>
 
-        {loading && (
-          <div className="rounded-xl p-3 bg-slate-900 border border-purple-500/40 space-y-1">
-            <div className="text-[11px] text-purple-300 animate-pulse">AI 正在流式生成响应...</div>
-            <div className="whitespace-pre-wrap text-slate-200">{streamingText || '...'}</div>
+                {turn.extractedCode && activeFile ? (
+                  <div className="mt-2.5 space-y-2 border-t border-outline-variant pt-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outlined"
+                        icon={<Eye size={13} />}
+                        onClick={() => setDiffPreviewTurnId((cur) => (cur === turn.id ? null : turn.id))}
+                      >
+                        {diffPreviewTurnId === turn.id ? '收起 Diff' : '预览 Diff'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="filled"
+                        icon={<Check size={13} />}
+                        data-testid="apply-ai-patch-btn"
+                        onClick={async () => {
+                          await onApplyCodePatch(activeFile.filepath, turn.extractedCode!);
+                          setAppliedTurnIds((prev) => ({ ...prev, [turn.id]: true }));
+                        }}
+                      >
+                        {appliedTurnIds[turn.id]
+                          ? '已写入'
+                          : `采纳到 ${activeFile.filepath.split('/').pop()}`}
+                      </Button>
+                    </div>
+
+                    {diffPreviewTurnId === turn.id ? (
+                      <UnifiedDiffViewer
+                        filepath={activeFile.filepath}
+                        oldText={activeFile.content}
+                        newText={turn.extractedCode}
+                        maxHeightClass="max-h-64"
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+
+        {loading ? (
+          <div className="mr-1 border-l-2 border-tertiary/50 pl-2.5">
+            <div className="mb-1 flex items-center gap-1.5 text-2xs uppercase tracking-wide text-tertiary">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-tertiary" />
+              正在生成
+            </div>
+            <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-on-surface">
+              {streamingText || '…'}
+            </div>
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Bottom Input + Voice Trigger */}
+      {!config.apiKey ? (
+        <Notice
+          tone="warning"
+          icon={<KeyRound size={13} />}
+          actions={
+            <Button size="sm" variant="text" onClick={() => setShowSettings(true)}>
+              填写
+            </Button>
+          }
+        >
+          尚未配置 API Key，AI 请求会失败。
+        </Notice>
+      ) : null}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void runPrompt(input);
         }}
-        className="flex items-center gap-1.5 p-2 bg-slate-900 border-t border-slate-800 shrink-0"
+        className="flex shrink-0 items-center gap-1.5 border-t border-outline-variant bg-surface px-2 py-2"
       >
-        <button
-          type="button"
-          onClick={handleVoiceInput}
-          className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0"
-          title="语音口述需求"
-        >
-          <Mic className="w-4 h-4" />
-        </button>
-        <input
-          type="text"
+        <IconButton label="语音输入" size="md" onClick={handleVoiceInput}>
+          <Mic size={16} />
+        </IconButton>
+        <TextInput
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={
             activeFile
-              ? `针对 ${activeFile.filepath.split('/').pop()} 提问或描述修改指令...`
-              : '输入编程问题或代码生成需求...'
+              ? `针对 ${activeFile.filepath.split('/').pop()} 提问…`
+              : '描述需求或粘贴代码…'
           }
-          className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-purple-500"
+          aria-label="AI 提问输入框"
+          containerClassName="min-w-0 flex-1"
         />
-        <button
+        <IconButton
+          label="发送"
+          size="md"
+          variant="filled"
           type="submit"
           disabled={loading}
-          className="p-2 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white shrink-0"
         >
-          <Send className="w-4 h-4" />
-        </button>
+          <Send size={15} />
+        </IconButton>
       </form>
-    </div>
+    </Panel>
   );
 };

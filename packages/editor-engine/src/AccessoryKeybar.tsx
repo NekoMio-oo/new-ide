@@ -9,7 +9,10 @@ import {
   CornerDownLeft,
   IndentIncrease,
   IndentDecrease,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
+import { haptic, useOverflowFade } from '@pocketforge/ui-kit';
 
 export interface EditorCommandDelegate {
   insertPair(open: string, close?: string): void;
@@ -28,7 +31,7 @@ interface AccessoryKeybarProps {
   delegate: EditorCommandDelegate | null;
 }
 
-const ROW1_SYMBOLS: Array<{ label: string; open: string; close?: string }> = [
+const SYMBOLS: Array<{ label: string; open: string; close?: string }> = [
   { label: '{ }', open: '{', close: '}' },
   { label: '( )', open: '(', close: ')' },
   { label: '[ ]', open: '[', close: ']' },
@@ -49,12 +52,29 @@ const ROW1_SYMBOLS: Array<{ label: string; open: string; close?: string }> = [
   { label: '_', open: '_' },
 ];
 
+const keyClass =
+  'press flex h-7 shrink-0 items-center justify-center gap-1 rounded-xs border border-outline-variant bg-surface-container px-1.5 ' +
+  'font-mono text-xs text-on-surface-variant active:border-primary/50 active:bg-primary/12 active:text-primary';
+
+/**
+ * Two-row touch accessory bar: a stable control row (thumb-reachable) plus a
+ * scrollable symbol row. Flat surfaces and 1px borders — no pill farm.
+ */
 export const AccessoryKeybar: React.FC<AccessoryKeybarProps> = ({ delegate }) => {
-  const trackState = useRef<{ startX: number; startY: number; accumX: number; accumY: number } | null>(null);
+  const trackState = useRef<{ startX: number; startY: number; accumX: number; accumY: number } | null>(
+    null
+  );
   const [trackpadActive, setTrackpadActive] = useState(false);
+  const [symbolsOpen, setSymbolsOpen] = useState(true);
 
   const preventFocusLoss = (e: React.PointerEvent | React.MouseEvent) => {
     e.preventDefault();
+  };
+
+  const press = (run: () => void) => (e: React.PointerEvent) => {
+    preventFocusLoss(e);
+    haptic('tap');
+    run();
   };
 
   const handleTrackStart = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -86,130 +106,142 @@ export const AccessoryKeybar: React.FC<AccessoryKeybarProps> = ({ delegate }) =>
     setTrackpadActive(false);
   };
 
+  const controlRow = useOverflowFade<HTMLDivElement>();
+  const symbolRow = useOverflowFade<HTMLDivElement>(symbolsOpen);
+
   return (
     <div
-      className="select-none bg-slate-900/95 border-t border-slate-800 backdrop-blur-md text-slate-200 z-20"
+      className="no-select z-20 shrink-0 border-t border-outline-variant bg-surface-container-low"
       data-testid="accessory-keybar"
     >
-      {/* Row 1: Action Controls + Semantic Expand + Virtual Trackpad */}
-      <div className="flex items-center gap-1 px-1.5 py-1 border-b border-slate-800/80 overflow-x-auto no-scrollbar">
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.indent('in')}
-          className="px-2 py-1 rounded bg-slate-800 active:bg-sky-600 text-xs font-mono flex items-center gap-1 shrink-0"
-          title="缩进 (Tab)"
-        >
-          <IndentIncrease className="w-3.5 h-3.5" />
-          <span>Tab</span>
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.indent('out')}
-          className="px-2 py-1 rounded bg-slate-800 active:bg-sky-600 text-xs font-mono shrink-0"
-          title="反缩进 (Shift+Tab)"
-        >
-          <IndentDecrease className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.expandSelection()}
-          className="px-2 py-1 rounded bg-sky-950/80 border border-sky-800/60 active:bg-sky-700 text-sky-300 text-xs flex items-center gap-1 shrink-0"
-          title="按语法树扩大选区"
-        >
-          <Maximize2 className="w-3 h-3" />
-          <span>扩选</span>
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.shrinkSelection()}
-          className="px-1.5 py-1 rounded bg-slate-800 active:bg-slate-700 text-xs shrink-0"
-          title="缩小选区"
-        >
-          <Minimize2 className="w-3 h-3" />
-        </button>
-
-        {/* Spacebar Virtual Trackpad */}
+      {/* Control row: everything scrolls except Enter, which must always be reachable. */}
+      <div className="flex h-8 items-center gap-1 pl-1.5 pr-1">
         <div
-          onPointerDown={handleTrackStart}
-          onPointerMove={handleTrackMove}
-          onPointerUp={handleTrackEnd}
-          onPointerCancel={handleTrackEnd}
-          data-testid="spacebar-trackpad"
-          className={`flex-1 min-w-[96px] h-7 rounded px-2 flex items-center justify-center gap-1.5 text-[11px] touch-none transition-colors cursor-ew-resize ${
-            trackpadActive
-              ? 'bg-sky-600 text-white font-medium'
-              : 'bg-slate-800/90 text-slate-400 border border-slate-700/70'
+          ref={controlRow.ref}
+          className={`no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto ${
+            controlRow.overflowing ? 'edge-fade' : ''
           }`}
         >
-          <MoveHorizontal className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">滑动控光标</span>
+          <button type="button" className={keyClass} onPointerDown={press(() => delegate?.indent('in'))} title="缩进 (Tab)">
+            <IndentIncrease size={13} />
+            <span className="hidden xs:inline">Tab</span>
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.indent('out'))}
+            title="反缩进 (Shift+Tab)"
+          >
+            <IndentDecrease size={13} />
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.undo())}
+            title="撤销"
+          >
+            <Undo2 size={13} />
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.redo())}
+            title="重做"
+          >
+            <Redo2 size={13} />
+          </button>
+          <button
+            type="button"
+            className={keyClass}
+            onPointerDown={press(() => delegate?.toggleComment())}
+            title="切换行注释"
+          >
+            //
+          </button>
+
+          {/* Spacebar-style trackpad: drag to move the caret. */}
+          <div
+            onPointerDown={handleTrackStart}
+            onPointerMove={handleTrackMove}
+            onPointerUp={handleTrackEnd}
+            onPointerCancel={handleTrackEnd}
+            data-testid="spacebar-trackpad"
+            aria-label="滑动光标：拖动移动光标位置"
+            className={`flex h-7 min-w-[72px] flex-1 touch-none items-center justify-center gap-1.5 rounded-xs border px-2 text-2xs transition-colors ${
+              trackpadActive
+                ? 'border-primary/60 bg-primary/12 text-primary'
+                : 'border-outline-variant bg-surface-container text-on-surface-variant'
+            }`}
+          >
+            <MoveHorizontal size={13} className="shrink-0" />
+            {/* Icon-only on narrow phones; the label would truncate to "滑动…". */}
+            <span className="hidden truncate sm:inline">滑动光标</span>
+          </div>
+
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.expandSelection())}
+            title="扩大选区"
+          >
+            <Maximize2 size={12} />
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.shrinkSelection())}
+            title="缩小选区"
+          >
+            <Minimize2 size={12} />
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1`}
+            onPointerDown={press(() => delegate?.openSearch())}
+            title="查找替换"
+          >
+            <Search size={13} />
+          </button>
+          <button
+            type="button"
+            className={`${keyClass} px-1 text-on-surface-variant`}
+            onPointerDown={press(() => setSymbolsOpen((v) => !v))}
+            title={symbolsOpen ? '收起符号行' : '展开符号行'}
+            aria-expanded={symbolsOpen}
+          >
+            {symbolsOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+          </button>
         </div>
 
         <button
           type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.toggleComment()}
-          className="px-2 py-1 rounded bg-slate-800 active:bg-sky-600 text-xs font-mono shrink-0"
-          title="切换行注释"
-        >
-          //
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.undo()}
-          className="p-1.5 rounded bg-slate-800 active:bg-sky-600 shrink-0"
-          title="撤销"
-        >
-          <Undo2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.redo()}
-          className="p-1.5 rounded bg-slate-800 active:bg-sky-600 shrink-0"
-          title="重做"
-        >
-          <Redo2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.openSearch()}
-          className="p-1.5 rounded bg-slate-800 active:bg-sky-600 shrink-0"
-          title="查找替换"
-        >
-          <Search className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          onPointerDown={preventFocusLoss}
-          onClick={() => delegate?.insertNewline()}
-          className="p-1.5 rounded bg-sky-600/90 active:bg-sky-500 text-white shrink-0"
+          className="press flex h-7 w-9 shrink-0 items-center justify-center rounded-xs bg-primary text-on-primary active:bg-primary/80"
+          onPointerDown={press(() => delegate?.insertNewline())}
           title="智能换行"
         >
-          <CornerDownLeft className="w-3.5 h-3.5" />
+          <CornerDownLeft size={14} />
         </button>
       </div>
 
-      {/* Row 2: Horizontal Swipeable Paired Code Symbols */}
-      <div className="flex items-center gap-1 px-1.5 py-1 overflow-x-auto no-scrollbar">
-        {ROW1_SYMBOLS.map((sym) => (
-          <button
-            key={sym.label}
-            type="button"
-            onPointerDown={preventFocusLoss}
-            onClick={() => delegate?.insertPair(sym.open, sym.close)}
-            className="min-w-[34px] h-7 px-2 rounded bg-slate-800/95 hover:bg-slate-700 active:bg-sky-600 text-xs font-mono text-slate-100 shrink-0"
-          >
-            {sym.label}
-          </button>
-        ))}
-      </div>
+      {symbolsOpen ? (
+        <div
+          ref={symbolRow.ref}
+          className={`keybar-symbols no-scrollbar flex h-8 items-center gap-1 overflow-x-auto border-t border-outline-variant/70 px-1.5 ${
+            symbolRow.overflowing ? 'edge-fade' : ''
+          }`}
+        >
+          {SYMBOLS.map((sym) => (
+            <button
+              key={sym.label}
+              type="button"
+              onPointerDown={press(() => delegate?.insertPair(sym.open, sym.close))}
+              className="press h-7 min-w-[32px] shrink-0 rounded-xs px-1.5 font-mono text-xs text-on-surface-variant hover:bg-on-surface/[0.06] active:bg-primary/12 active:text-primary"
+            >
+              {sym.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 };

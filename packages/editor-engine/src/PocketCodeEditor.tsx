@@ -8,6 +8,7 @@ import {
   highlightActiveLineGutter,
   drawSelection,
   rectangularSelection,
+  highlightSpecialChars,
 } from '@codemirror/view';
 import {
   defaultKeymap,
@@ -23,18 +24,21 @@ import {
   toggleComment,
   insertNewlineAndIndent,
 } from '@codemirror/commands';
-import {
-  bracketMatching,
-  foldGutter,
-  indentOnInput,
-  syntaxHighlighting,
-  defaultHighlightStyle,
-} from '@codemirror/language';
+import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language';
 import { closeBrackets, autocompletion, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, openSearchPanel } from '@codemirror/search';
-import { oneDark } from '@codemirror/theme-one-dark';
-import { Sparkles, Bug, Zap, FlaskConical, ListTree } from 'lucide-react';
+import { Sparkles, Bug, Zap, FlaskConical, ListTree, WrapText } from 'lucide-react';
+import {
+  Badge,
+  Button,
+  IconButton,
+  ListRow,
+  Sheet,
+  StatusStrip,
+  useResolvedScheme,
+} from '@pocketforge/ui-kit';
 import { AccessoryKeybar, type EditorCommandDelegate } from './AccessoryKeybar';
+import { getM3EditorTheme, getM3SyntaxHighlighting } from './m3CodeTheme';
 import {
   detectLanguageBadge,
   extractDocumentSymbols,
@@ -63,7 +67,7 @@ interface PocketCodeEditorProps {
 export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
   filepath,
   content,
-  fontSize = 14,
+  fontSize = 13,
   wordWrap = true,
   showKeybar = true,
   onChange,
@@ -75,8 +79,11 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
   const langCompartment = useRef(new Compartment());
   const wrapCompartment = useRef(new Compartment());
   const themeCompartment = useRef(new Compartment());
+  const syntaxCompartment = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  const scheme = useResolvedScheme();
 
   const [selectedSnippet, setSelectedSnippet] = useState('');
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
@@ -85,26 +92,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
   const symbols = useMemo(() => extractDocumentSymbols(content, filepath), [content, filepath]);
   const langBadge = useMemo(() => detectLanguageBadge(filepath), [filepath]);
 
-  const buildSizeTheme = (sizePx: number) =>
-    EditorView.theme({
-      '&': {
-        height: '100%',
-        fontSize: `${sizePx}px`,
-        backgroundColor: '#0b1120',
-      },
-      '.cm-scroller': {
-        fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace',
-        lineHeight: '1.55',
-        overflow: 'auto',
-      },
-      '.cm-gutters': {
-        backgroundColor: '#0f172a',
-        borderRight: '1px solid #1e293b',
-        color: '#64748b',
-      },
-    });
-
-  // Mount CodeMirror 6 instance once and swap compartments dynamically
+  // Mount CodeMirror 6 once and swap compartments dynamically.
   useEffect(() => {
     if (!hostRef.current) return;
 
@@ -114,6 +102,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
         lineNumbers(),
         highlightActiveLineGutter(),
         highlightActiveLine(),
+        highlightSpecialChars(),
         history(),
         foldGutter(),
         drawSelection(),
@@ -122,8 +111,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
         bracketMatching(),
         closeBrackets(),
         autocompletion(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        oneDark,
+        syntaxCompartment.current.of(getM3SyntaxHighlighting(scheme)),
         keymap.of([
           ...closeBracketsKeymap,
           ...defaultKeymap,
@@ -134,7 +122,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
         ]),
         langCompartment.current.of(resolveLanguageExtension(filepath)),
         wrapCompartment.current.of(wordWrap ? EditorView.lineWrapping : []),
-        themeCompartment.current.of(buildSizeTheme(fontSize)),
+        themeCompartment.current.of(getM3EditorTheme(scheme)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(update.state.doc.toString());
@@ -163,15 +151,13 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filepath]);
 
-  // Sync external content edits (e.g. AI patch applied or Git discard/checkout)
+  // Sync external content edits (AI patch applied, Git discard/checkout).
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
     if (current !== content) {
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: content },
-      });
+      view.dispatch({ changes: { from: 0, to: current.length, insert: content } });
     }
   }, [content]);
 
@@ -183,8 +169,16 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: themeCompartment.current.reconfigure(buildSizeTheme(fontSize)),
+      effects: [
+        themeCompartment.current.reconfigure(getM3EditorTheme(scheme)),
+        syntaxCompartment.current.reconfigure(getM3SyntaxHighlighting(scheme)),
+      ],
     });
+  }, [scheme]);
+
+  // Font size is a CSS variable on the host, so a change only needs a re-measure.
+  useEffect(() => {
+    viewRef.current?.requestMeasure();
   }, [fontSize]);
 
   const jumpToLocation = (line: number, column = 1) => {
@@ -205,9 +199,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
     replaceRangeOrFull: (nextContent: string) => {
       const view = viewRef.current;
       if (!view) return;
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: nextContent },
-      });
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: nextContent } });
     },
     getSelectedText: () => {
       const view = viewRef.current;
@@ -284,9 +276,7 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
         }
       },
       openSearch: () => {
-        if (viewRef.current) {
-          openSearchPanel(viewRef.current);
-        }
+        if (viewRef.current) openSearchPanel(viewRef.current);
       },
       insertNewline: () => {
         if (viewRef.current) {
@@ -298,96 +288,101 @@ export const PocketCodeEditor: React.FC<PocketCodeEditorProps> = ({
     []
   );
 
-  return (
-    <div className="flex flex-col h-full w-full bg-[#0b1120] relative overflow-hidden">
-      {/* Compact Mobile Breadcrumb + Symbol Outline Bar */}
-      <div className="flex items-center justify-between px-2.5 py-1 bg-slate-900/90 border-b border-slate-800/80 text-[11px] text-slate-400 shrink-0">
-        <div className="flex items-center gap-2 truncate">
-          <span className="text-slate-300 font-mono truncate">{filepath}</span>
-          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 font-medium shrink-0">
-            {langBadge}
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="font-mono text-slate-500">
-            Ln {cursorPos.line}, Col {cursorPos.col}
-          </span>
-          {symbols.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowOutline((v) => !v)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-            >
-              <ListTree className="w-3 h-3 text-sky-400" />
-              <span>大纲 ({symbols.length})</span>
-            </button>
-          )}
-        </div>
-      </div>
+  const quickActions: Array<{ key: QuickAIActionType; label: string; icon: React.ReactNode }> = [
+    { key: 'explain', label: '解释', icon: <Sparkles size={13} /> },
+    { key: 'fix', label: '查错', icon: <Bug size={13} /> },
+    { key: 'optimize', label: '优化', icon: <Zap size={13} /> },
+    { key: 'test', label: '单测', icon: <FlaskConical size={13} /> },
+  ];
 
-      {/* Collapsible AST Symbol Jump Drawer */}
-      {showOutline && symbols.length > 0 && (
-        <div className="max-h-40 overflow-y-auto bg-slate-900 border-b border-slate-800 px-2 py-1.5 grid grid-cols-2 sm:grid-cols-3 gap-1 z-20">
+  return (
+    <div
+      className="relative flex h-full w-full flex-col overflow-hidden bg-editor"
+      style={{ '--editor-font-size': `${fontSize}px` } as React.CSSProperties}
+    >
+      {/* Code surface — the only thing that should compete for space. */}
+      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" data-testid="codemirror-host" />
+
+      {/* Selection-aware AI actions live here, not floating over the code. */}
+      {selectedSnippet && onQuickAIAction ? (
+        <div className="flex h-9 shrink-0 animate-panel-in items-center gap-1 overflow-x-auto border-t border-outline-variant bg-surface-container-low px-2 no-scrollbar">
+          <span className="hidden shrink-0 font-mono text-2xs text-on-surface-variant xs:inline">
+            {selectedSnippet.length} 字符
+          </span>
+          <span className="flex-1" />
+          {quickActions.map((action) => (
+            <Button
+              key={action.key}
+              size="sm"
+              variant="ghost"
+              icon={action.icon}
+              className="px-2 text-xs"
+              onClick={() => onQuickAIAction(action.key, selectedSnippet, filepath)}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+
+      <StatusStrip
+        data-testid="editor-status"
+        items={[
+          { key: 'cursor', label: `Ln ${cursorPos.line}, Col ${cursorPos.col}` },
+          ...(selectedSnippet
+            ? [{ key: 'sel', label: `${selectedSnippet.length} 已选`, tone: 'primary' as const }]
+            : []),
+        ]}
+        trailing={
+          <div className="flex items-center gap-1.5">
+            {wordWrap ? (
+              <span className="hidden items-center gap-1 text-on-surface-variant sm:flex">
+                <WrapText size={11} />
+                换行
+              </span>
+            ) : null}
+            {symbols.length > 0 ? (
+              <button
+                type="button"
+                aria-label={`文档大纲（${symbols.length} 个符号）`}
+                onClick={() => setShowOutline(true)}
+                className="press flex items-center gap-1 rounded-xs px-1 py-0.5 text-on-surface-variant hover:bg-on-surface/[0.06] hover:text-on-surface"
+              >
+                <ListTree size={11} />
+                <span className="text-2xs">{symbols.length}</span>
+              </button>
+            ) : null}
+            <Badge tone="info" className="bg-transparent px-0 text-primary">
+              {langBadge}
+            </Badge>
+          </div>
+        }
+      />
+
+      {showKeybar ? <AccessoryKeybar delegate={delegate} /> : null}
+
+      <Sheet
+        open={showOutline}
+        onClose={() => setShowOutline(false)}
+        title="文档大纲"
+        description={`${filepath} · ${symbols.length} 个符号`}
+        testId="outline-sheet"
+      >
+        <div className="px-1.5 pb-3">
           {symbols.map((sym, idx) => (
-            <button
+            <ListRow
               key={`${sym.name}-${sym.line}-${idx}`}
-              type="button"
+              title={sym.name}
+              titleClassName="font-mono"
+              meta={`:${sym.line}`}
               onClick={() => {
                 jumpToLocation(sym.line, 1);
                 setShowOutline(false);
               }}
-              className="flex items-center justify-between px-2 py-1 rounded bg-slate-800/80 hover:bg-sky-900/50 text-left text-xs"
-            >
-              <span className="truncate font-mono text-slate-200">{sym.name}</span>
-              <span className="text-[10px] text-slate-500 ml-1 shrink-0">:{sym.line}</span>
-            </button>
+            />
           ))}
         </div>
-      )}
-
-      {/* Selection Quick AI Action Floating Capsule (Mobile No-Typing UX) */}
-      {selectedSnippet && onQuickAIAction && (
-        <div className="absolute top-9 right-3 z-30 flex items-center gap-1 bg-slate-900/95 border border-sky-500/40 shadow-lg rounded-full px-2 py-1 backdrop-blur">
-          <button
-            type="button"
-            onClick={() => onQuickAIAction('explain', selectedSnippet, filepath)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>解释</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onQuickAIAction('fix', selectedSnippet, filepath)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-rose-500/20 text-rose-300 hover:bg-rose-500/30"
-          >
-            <Bug className="w-3 h-3" />
-            <span>查错</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onQuickAIAction('optimize', selectedSnippet, filepath)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
-          >
-            <Zap className="w-3 h-3" />
-            <span>优化</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onQuickAIAction('test', selectedSnippet, filepath)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
-          >
-            <FlaskConical className="w-3 h-3" />
-            <span>单测</span>
-          </button>
-        </div>
-      )}
-
-      {/* CodeMirror 6 Host Container */}
-      <div ref={hostRef} className="flex-1 min-h-0 overflow-hidden" data-testid="codemirror-host" />
-
-      {/* Dual-Row Mobile Touch Accessory Keybar */}
-      {showKeybar && <AccessoryKeybar delegate={delegate} />}
+      </Sheet>
     </div>
   );
 };

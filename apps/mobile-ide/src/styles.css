@@ -1,7 +1,74 @@
+@import './theme/m3-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Base — full-bleed, no browser scrolling, IDE-grade text rendering
+   ───────────────────────────────────────────────────────────────────────── */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overscroll-behavior: none;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: rgb(var(--m3-surface));
+    color: rgb(var(--m3-on-surface));
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 19px;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Visible, consistent keyboard focus (desktop + external keyboards) */
+  :focus-visible {
+    outline: 2px solid rgb(var(--m3-primary) / 0.75);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background-color: rgb(var(--m3-editor-selection));
+    color: rgb(var(--m3-on-surface));
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--m3-outline) / 0.85);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Utilities
+   ───────────────────────────────────────────────────────────────────────── */
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;
@@ -10,20 +77,288 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
-  .pb-safe {
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
+
   .pt-safe {
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: var(--safe-top);
+  }
+  .pb-safe {
+    padding-bottom: var(--safe-bottom);
+  }
+  .px-safe {
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  .touch-scroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* Chrome must not be text-selectable; code and content must be. */
+  .no-select {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Tactile press feedback shared by every interactive surface. */
+  .press {
+    transition:
+      background-color var(--motion-fast) var(--ease-standard),
+      color var(--motion-fast) var(--ease-standard),
+      border-color var(--motion-fast) var(--ease-standard),
+      opacity var(--motion-fast) var(--ease-standard),
+      transform var(--motion-fast) var(--ease-standard);
+  }
+  .press:active:not(:disabled) {
+    transform: scale(0.975);
+  }
+
+  /* Horizontal scrollers fade their trailing edge instead of hard-cutting. */
+  .edge-fade {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
   }
 }
 
-html,
-body,
-#root {
+/* ─────────────────────────────────────────────────────────────────────────
+   CodeMirror 6 — editor chrome, maximising usable code area
+   ───────────────────────────────────────────────────────────────────────── */
+.cm-editor {
   height: 100%;
-  width: 100%;
-  margin: 0;
+  background-color: rgb(var(--m3-editor));
+}
+
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.cm-editor .cm-content {
+  padding-bottom: 16px;
+  caret-color: rgb(var(--m3-editor-cursor));
+}
+
+/* While the soft keyboard is open, let the caret scroll well above it. */
+body.kb-open .cm-editor .cm-content {
+  padding-bottom: 42vh;
+}
+
+.cm-editor .cm-line {
+  padding-left: 2px;
+}
+
+.cm-editor .cm-gutters {
+  border-right: 1px solid rgb(var(--m3-outline-variant));
+  padding-left: calc(4px + env(safe-area-inset-left, 0px));
+}
+
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 28px;
+  padding: 0 6px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Touch-friendly panel widgets (search / autocomplete) */
+.cm-panels .cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.cm-panel.cm-search input {
+  min-height: 28px;
+  border-radius: var(--m3-shape-sm);
+  padding: 2px 8px;
+}
+.cm-panel.cm-search button {
+  min-height: 28px;
+  border-radius: var(--m3-shape-sm);
+  padding: 2px 8px;
+}
+.cm-tooltip-autocomplete > ul {
+  max-height: 220px;
+  font-size: 12px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   xterm.js — breathing room + thumb-friendly scrollbar
+   ───────────────────────────────────────────────────────────────────────── */
+.term-host .xterm {
+  height: 100%;
+  padding: 6px 8px 4px;
+}
+.term-host .xterm-viewport {
+  background-color: transparent !important;
+}
+.term-host .xterm-viewport::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Markdown / rendered content (no typography plugin dependency)
+   ───────────────────────────────────────────────────────────────────────── */
+.md-body {
+  color: rgb(var(--m3-on-surface));
+  font-size: 12.5px;
+  line-height: 1.75;
+  word-break: break-word;
+}
+.md-body > * + * {
+  margin-top: 8px;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  font-weight: 600;
+  line-height: 1.35;
+  color: rgb(var(--m3-on-surface));
+  letter-spacing: -0.01em;
+}
+.md-body h1 {
+  font-size: 17px;
+}
+.md-body h2 {
+  font-size: 15px;
+}
+.md-body h3 {
+  font-size: 13.5px;
+}
+.md-body a {
+  color: rgb(var(--m3-primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-body ul,
+.md-body ol {
+  padding-left: 18px;
+}
+.md-body ul {
+  list-style: disc;
+}
+.md-body ol {
+  list-style: decimal;
+}
+.md-body li + li {
+  margin-top: 3px;
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background-color: rgb(var(--m3-surface-container-high));
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.md-body pre {
+  background-color: rgb(var(--m3-surface-container-lowest));
+  border: 1px solid rgb(var(--m3-outline-variant));
+  border-radius: var(--m3-shape-md);
+  padding: 10px;
+  overflow-x: auto;
+}
+.md-body pre code {
+  background: none;
   padding: 0;
-  overscroll-behavior: none;
+}
+.md-body blockquote {
+  border-left: 2px solid rgb(var(--m3-outline));
+  padding-left: 10px;
+  color: rgb(var(--m3-on-surface-variant));
+}
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid rgb(var(--m3-outline-variant));
+  padding: 4px 8px;
+  text-align: left;
+}
+.md-body hr {
+  border-color: rgb(var(--m3-outline-variant));
+}
+.md-body .katex-display {
+  margin: 10px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Responsive shell — landscape phones become a rail + side-by-side split
+   ───────────────────────────────────────────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 560px) {
+  .app-nav {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: var(--rail-w);
+    padding-left: var(--safe-left);
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 2px;
+    border-top: 0;
+    border-right: 1px solid rgb(var(--m3-outline-variant));
+    background-color: rgb(var(--m3-surface-container-low));
+    padding-top: 8px;
+  }
+  .app-nav-item {
+    flex: 0 0 auto;
+    width: 100%;
+    height: 46px;
+    padding: 0;
+    border-radius: var(--m3-shape-md);
+  }
+  .app-nav-item span[data-label] {
+    display: none;
+  }
+  .app-header-title {
+    display: none;
+  }
+  .app-stage {
+    padding-left: var(--rail-w);
+  }
+  .keybar-symbols {
+    display: none;
+  }
+  .split-pane {
+    flex-direction: row !important;
+  }
+  .split-pane > [data-pane='preview'] {
+    height: 100% !important;
+    width: var(--split-size, 42%);
+    border-bottom: 0;
+    border-right: 1px solid rgb(var(--m3-outline-variant));
+  }
+  .split-handle {
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+  }
+  .split-handle::after {
+    width: 2px;
+    height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

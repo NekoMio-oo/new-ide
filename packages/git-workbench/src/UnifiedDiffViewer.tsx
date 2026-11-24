@@ -53,6 +53,7 @@ interface UnifiedDiffViewerProps {
   maxHeightClass?: string;
 }
 
+/** Unified diff rendered as instrument output: gutter numbers, tinted rows. */
 export const UnifiedDiffViewer: React.FC<UnifiedDiffViewerProps> = ({
   oldText,
   newText,
@@ -71,37 +72,41 @@ export const UnifiedDiffViewer: React.FC<UnifiedDiffViewerProps> = ({
   }, [rows]);
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950 overflow-hidden text-xs font-mono">
-      <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-900 border-b border-slate-800">
-        <span className="text-slate-300 truncate">{filepath || 'Unified Touch Diff'}</span>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-emerald-400">+{stats.added}</span>
-          <span className="text-rose-400">-{stats.removed}</span>
+    <div className="overflow-hidden rounded-sm border border-outline-variant bg-editor">
+      <div className="flex h-8 items-center justify-between gap-2 border-b border-outline-variant bg-surface-container px-2.5">
+        <span className="truncate font-mono text-2xs text-on-surface">
+          {filepath || 'Unified Diff'}
+        </span>
+        <div className="flex shrink-0 items-center gap-2 font-mono text-2xs">
+          <span className="text-gitAdded">+{stats.added}</span>
+          <span className="text-gitDeleted">-{stats.removed}</span>
         </div>
       </div>
 
-      <div className={`${maxHeightClass} overflow-auto divide-y divide-slate-900/60`}>
+      <div className={`${maxHeightClass} overflow-auto font-mono text-xs touch-scroll`}>
         {rows.length === 0 ? (
-          <div className="p-3 text-slate-500 text-center">文件内容无差异</div>
+          <div className="px-3 py-6 text-center text-on-surface-variant">文件内容无差异</div>
         ) : (
           rows.map((row, idx) => {
-            const bg =
+            const tone =
               row.type === 'add'
-                ? 'bg-emerald-950/45 text-emerald-200'
+                ? 'bg-gitAdded/10 text-gitAdded'
                 : row.type === 'remove'
-                  ? 'bg-rose-950/45 text-rose-200'
-                  : 'text-slate-400';
+                  ? 'bg-gitDeleted/10 text-gitDeleted'
+                  : 'text-on-surface-variant';
             const prefix = row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' ';
             return (
-              <div key={idx} className={`flex items-stretch px-2 py-0.5 ${bg}`}>
-                <span className="w-7 text-right pr-1.5 text-[10px] text-slate-600 select-none shrink-0">
+              <div key={idx} className={`flex items-stretch py-[1px] ${tone}`}>
+                <span className="w-8 shrink-0 select-none pr-1.5 text-right text-2xs text-on-surface-variant/45">
                   {row.oldLine ?? ''}
                 </span>
-                <span className="w-7 text-right pr-1.5 text-[10px] text-slate-600 select-none shrink-0">
+                <span className="w-8 shrink-0 select-none pr-1.5 text-right text-2xs text-on-surface-variant/45">
                   {row.newLine ?? ''}
                 </span>
-                <span className="w-4 select-none font-bold shrink-0">{prefix}</span>
-                <span className="whitespace-pre-wrap break-all flex-1">{row.content || ' '}</span>
+                <span className="w-3 shrink-0 select-none text-center opacity-80">{prefix}</span>
+                <span className="flex-1 whitespace-pre-wrap break-all pr-2 selectable">
+                  {row.content || ' '}
+                </span>
               </div>
             );
           })

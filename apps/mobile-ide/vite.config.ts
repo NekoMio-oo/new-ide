@@ -7,6 +7,8 @@ export default defineConfig({
   base: './',
   resolve: {
     alias: {
+      '@pocketforge/m3-theme': path.resolve(__dirname, '../../packages/m3-theme/src/index.ts'),
+      '@pocketforge/ui-kit': path.resolve(__dirname, '../../packages/ui-kit/src/index.ts'),
       '@pocketforge/runtime-bridge': path.resolve(__dirname, '../../packages/runtime-bridge/src/index.ts'),
       '@pocketforge/editor-engine': path.resolve(__dirname, '../../packages/editor-engine/src/index.ts'),
       '@pocketforge/terminal-runner': path.resolve(__dirname, '../../packages/terminal-runner/src/index.ts'),

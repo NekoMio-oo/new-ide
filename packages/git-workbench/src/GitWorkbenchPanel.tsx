@@ -8,12 +8,30 @@ import {
   Check,
   FolderGit2,
   AlertOctagon,
+  ChevronRight,
+  X,
 } from 'lucide-react';
 import type {
   GitCommitInfo,
   GitStatusItem,
   RuntimeBridge,
 } from '@pocketforge/runtime-bridge';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  IconButton,
+  ListRow,
+  Notice,
+  Panel,
+  PanelHeader,
+  Section,
+  SelectInput,
+  Sheet,
+  TextArea,
+  TextInput,
+  haptic,
+} from '@pocketforge/ui-kit';
 import {
   UnifiedDiffViewer,
   hasMergeConflictMarkers,
@@ -25,6 +43,16 @@ interface GitWorkbenchPanelProps {
   repoDir: string;
   onFileRestored?: () => void;
 }
+
+type FeedbackTone = 'info' | 'success' | 'error';
+
+const stateTone = (state: string): 'success' | 'warning' | 'error' | 'neutral' => {
+  const flag = state[0]?.toUpperCase();
+  if (flag === 'A' || flag === '?') return flag === '?' ? 'neutral' : 'success';
+  if (flag === 'D') return 'error';
+  if (flag === 'M' || flag === 'R') return 'warning';
+  return 'neutral';
+};
 
 export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
   bridge,
@@ -43,7 +71,8 @@ export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
   const [newBranchName, setNewBranchName] = useState('');
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [diffPair, setDiffPair] = useState<{ head: string; work: string } | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ text: string; tone: FeedbackTone } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const refreshGit = useCallback(async () => {
     const initialized = await bridge.git.isRepo(repoDir);
@@ -71,6 +100,8 @@ export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
     return unsub;
   }, [bridge.fs, refreshGit]);
 
+  const notify = (text: string, tone: FeedbackTone = 'info') => setFeedback({ text, tone });
+
   const openDiffFor = async (relFile: string) => {
     setSelectedDiffFile(relFile);
     const fullPath = repoDir ? `${repoDir}/${relFile}` : relFile;
@@ -82,28 +113,36 @@ export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
   };
 
   const handleStageAll = async () => {
+    setBusy(true);
     for (const item of statusItems.filter((i) => !i.staged)) {
       await bridge.git.stage(repoDir, item.filepath);
     }
     await refreshGit();
+    setBusy(false);
+    notify('已将全部变更加入暂存区', 'success');
   };
 
   const handleCommit = async (e: React.FormEvent) => {
     e.preventDefault();
     const msg = commitMsg.trim();
     if (!msg) {
-      setFeedback('请输入提交说明 (Commit Message)');
+      notify('请输入提交说明', 'error');
       return;
     }
     try {
+      setBusy(true);
       const oid = await bridge.git.commit(repoDir, msg);
       setCommitMsg('');
       setSelectedDiffFile(null);
       setDiffPair(null);
-      setFeedback(`已提交版本 ${oid.slice(0, 7)}`);
+      notify(`已提交 ${oid.slice(0, 7)}`, 'success');
+      haptic('success');
       await refreshGit();
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : String(err));
+      notify(err instanceof Error ? err.message : String(err), 'error');
+      haptic('error');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -112,10 +151,11 @@ export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
     if (!newBranchName.trim()) return;
     try {
       await bridge.git.createBranch(repoDir, newBranchName.trim(), true);
+      notify(`已创建并切换到 ${newBranchName.trim()}`, 'success');
       setNewBranchName('');
       await refreshGit();
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : String(err));
+      notify(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
@@ -126,250 +166,284 @@ export const GitWorkbenchPanel: React.FC<GitWorkbenchPanelProps> = ({
     await bridge.fs.writeFile(fullPath, resolved);
     await openDiffFor(selectedDiffFile);
     onFileRestored?.();
+    notify('冲突已按所选策略合并', 'success');
   };
 
   if (!isRepo) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-6 text-center bg-slate-950 text-slate-300 gap-3">
-        <FolderGit2 className="w-10 h-10 text-sky-400" />
-        <div className="text-sm font-medium">当前项目目录 ({repoDir || '/'}) 尚未初始化 Git 仓库</div>
-        <button
-          type="button"
-          onClick={async () => {
-            await bridge.git.init(repoDir);
-            await refreshGit();
-          }}
-          className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold"
-        >
-          一键离线初始化仓库 (git init)
-        </button>
-      </div>
+      <Panel>
+        <PanelHeader title="Git" subtitle={repoDir || '工作区根目录'} />
+        <EmptyState
+          icon={<FolderGit2 size={20} />}
+          title="尚未初始化 Git 仓库"
+          description={`目录 ${repoDir || '/'} 还不是 Git 仓库。初始化后可离线提交、切换分支并查看差异。`}
+          action={
+            <Button
+              variant="filled"
+              size="md"
+              icon={<GitBranch size={14} />}
+              onClick={async () => {
+                await bridge.git.init(repoDir);
+                await refreshGit();
+                notify('仓库已初始化', 'success');
+              }}
+            >
+              初始化仓库 (git init)
+            </Button>
+          }
+        />
+      </Panel>
     );
   }
 
   const stagedList = statusItems.filter((i) => i.staged);
   const unstagedList = statusItems.filter((i) => !i.staged);
+  const diffOpen = Boolean(selectedDiffFile && diffPair);
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-950 text-slate-200 overflow-y-auto p-3 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-        <div className="flex items-center gap-2">
-          <GitBranch className="w-4 h-4 text-sky-400" />
-          <span className="text-xs text-slate-400">仓库: {repoDir || 'root'}</span>
-          <select
+    <Panel>
+      <PanelHeader
+        title="Git"
+        subtitle={repoDir || 'root'}
+        leading={<GitBranch size={15} className="shrink-0 text-primary" />}
+        actions={
+          <IconButton label="刷新仓库状态" size="sm" onClick={() => void refreshGit()}>
+            <RotateCcw size={14} />
+          </IconButton>
+        }
+      />
+
+      <div className="min-h-0 flex-1 overflow-y-auto touch-scroll">
+        {/* Branch context + create */}
+        <div className="flex items-center gap-1.5 border-b border-outline-variant bg-surface-container-low px-3 py-2">
+          <SelectInput
+            size="sm"
+            aria-label="当前分支"
             value={branchInfo.current}
+            containerClassName="w-[136px] shrink-0"
             onChange={async (e) => {
               await bridge.git.checkout(repoDir, e.target.value);
               onFileRestored?.();
               await refreshGit();
+              notify(`已切换到 ${e.target.value}`, 'success');
             }}
-            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100"
           >
             {branchInfo.branches.map((b) => (
               <option key={b} value={b}>
                 {b}
               </option>
             ))}
-          </select>
+          </SelectInput>
+          <form onSubmit={handleCreateBranch} className="flex min-w-0 flex-1 items-center gap-1">
+            <TextInput
+              size="sm"
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              placeholder="新分支名"
+              aria-label="新分支名"
+              containerClassName="min-w-0 flex-1"
+            />
+            <IconButton label="创建并切换分支" size="sm" type="submit" variant="outlined">
+              <Plus size={14} />
+            </IconButton>
+          </form>
         </div>
 
-        <form onSubmit={handleCreateBranch} className="flex items-center gap-1">
-          <input
-            type="text"
-            value={newBranchName}
-            onChange={(e) => setNewBranchName(e.target.value)}
-            placeholder="新分支名..."
-            className="w-28 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs"
-          />
-          <button
-            type="submit"
-            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-sky-300"
+        {feedback ? (
+          <Notice
+            tone={feedback.tone}
+            actions={
+              <IconButton label="关闭提示" size="sm" onClick={() => setFeedback(null)}>
+                <X size={13} />
+              </IconButton>
+            }
           >
-            + 分支
-          </button>
-        </form>
-      </div>
+            {feedback.text}
+          </Notice>
+        ) : null}
 
-      {feedback && (
-        <div className="px-3 py-1.5 rounded-lg bg-sky-950/70 border border-sky-800/60 text-xs text-sky-200">
-          {feedback}
-        </div>
-      )}
-
-      <form onSubmit={handleCommit} className="flex gap-2">
-        <input
-          type="text"
-          value={commitMsg}
-          onChange={(e) => setCommitMsg(e.target.value)}
-          placeholder="输入 Commit 提交说明 (如 feat: 优化移动端布局)..."
-          className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 outline-none focus:border-sky-500"
-        />
-        <button
-          type="submit"
-          className="flex items-center gap-1 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shrink-0"
-        >
-          <Check className="w-3.5 h-3.5" />
-          <span>提交 ({stagedList.length})</span>
-        </button>
-      </form>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1.5">
-          <div className="flex items-center justify-between text-xs font-semibold text-emerald-400">
-            <span>暂存的更改 ({stagedList.length})</span>
+        {/* Commit composer */}
+        <form onSubmit={handleCommit} className="space-y-2 border-b border-outline-variant px-3 py-2.5">
+          <TextArea
+            rows={2}
+            value={commitMsg}
+            onChange={(e) => setCommitMsg(e.target.value)}
+            placeholder="提交说明，例如 feat: 优化移动端编辑器布局"
+            aria-label="提交说明"
+          />
+          <div className="flex items-center gap-2">
+            <span className="flex-1 font-mono text-2xs text-on-surface-variant">
+              {stagedList.length} 个文件已暂存
+            </span>
+            <Button
+              type="submit"
+              variant="filled"
+              size="md"
+              icon={<Check size={14} />}
+              disabled={busy}
+            >
+              提交
+            </Button>
           </div>
+        </form>
+
+        <Section
+          title="暂存的更改"
+          meta={<Badge>{stagedList.length}</Badge>}
+          bodyClassName="py-0"
+        >
           {stagedList.length === 0 ? (
-            <div className="text-xs text-slate-500 py-2">暂无已暂存文件</div>
+            <div className="px-3 py-2.5 text-xs text-on-surface-variant">暂无已暂存文件</div>
           ) : (
             stagedList.map((item) => (
-              <div
+              <ListRow
                 key={`staged-${item.filepath}`}
-                className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-slate-950 text-xs"
-              >
-                <button
-                  type="button"
-                  onClick={() => void openDiffFor(item.filepath)}
-                  className="text-left font-mono text-slate-200 truncate flex-1 hover:text-sky-300"
-                >
-                  {item.filepath}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void bridge.git.unstage(repoDir, item.filepath).then(refreshGit)}
-                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300"
-                  title="取消暂存"
-                >
-                  <Minus className="w-3.5 h-3.5" />
-                </button>
-              </div>
+                leading={<Badge tone={stateTone(item.state)}>{item.state[0] ?? 'M'}</Badge>}
+                title={item.filepath}
+                titleClassName="font-mono text-xs"
+                onClick={() => void openDiffFor(item.filepath)}
+                trailing={
+                  <IconButton
+                    label="取消暂存"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void bridge.git.unstage(repoDir, item.filepath).then(refreshGit);
+                    }}
+                  >
+                    <Minus size={13} />
+                  </IconButton>
+                }
+              />
             ))
           )}
-        </div>
+        </Section>
 
-        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1.5">
-          <div className="flex items-center justify-between text-xs font-semibold text-amber-300">
-            <span>工作区变更 ({unstagedList.length})</span>
-            {unstagedList.length > 0 && (
-              <button
-                type="button"
-                onClick={() => void handleStageAll()}
-                className="text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300"
-              >
+        <Section
+          title="工作区变更"
+          meta={<Badge>{unstagedList.length}</Badge>}
+          bodyClassName="py-0"
+          actions={
+            unstagedList.length > 0 ? (
+              <Button size="sm" variant="text" disabled={busy} onClick={() => void handleStageAll()}>
                 全部暂存
-              </button>
-            )}
-          </div>
+              </Button>
+            ) : null
+          }
+        >
           {unstagedList.length === 0 ? (
-            <div className="text-xs text-slate-500 py-2">工作区干净无修改</div>
+            <div className="px-3 py-2.5 text-xs text-on-surface-variant">工作区干净，无未提交修改</div>
           ) : (
             unstagedList.map((item) => (
-              <div
+              <ListRow
                 key={`unstaged-${item.filepath}`}
-                className="flex items-center justify-between gap-1.5 px-2 py-1.5 rounded bg-slate-950 text-xs"
-              >
-                <button
-                  type="button"
-                  onClick={() => void openDiffFor(item.filepath)}
-                  className="text-left font-mono text-slate-200 truncate flex-1 hover:text-sky-300"
-                >
-                  <span className="text-[10px] uppercase mr-1.5 px-1 rounded bg-slate-800 text-amber-300">
-                    {item.state[0]}
-                  </span>
-                  {item.filepath}
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await bridge.git.discardFile(repoDir, item.filepath);
-                    onFileRestored?.();
-                    await refreshGit();
-                  }}
-                  className="p-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-300"
-                  title="回滚放弃更改"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void bridge.git.stage(repoDir, item.filepath).then(refreshGit)}
-                  className="p-1 rounded bg-slate-800 hover:bg-emerald-900/50 text-emerald-300"
-                  title="暂存文件"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
+                leading={<Badge tone={stateTone(item.state)}>{item.state[0] ?? 'M'}</Badge>}
+                title={item.filepath}
+                titleClassName="font-mono text-xs"
+                onClick={() => void openDiffFor(item.filepath)}
+                trailing={
+                  <>
+                    <IconButton
+                      label="放弃更改并还原文件"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void bridge.git
+                          .discardFile(repoDir, item.filepath)
+                          .then(onFileRestored)
+                          .then(refreshGit)
+                          .then(() => notify('已还原文件', 'success'));
+                      }}
+                    >
+                      <RotateCcw size={13} />
+                    </IconButton>
+                    <IconButton
+                      label="暂存文件"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void bridge.git.stage(repoDir, item.filepath).then(refreshGit);
+                      }}
+                    >
+                      <Plus size={13} />
+                    </IconButton>
+                  </>
+                }
+              />
             ))
           )}
-        </div>
-      </div>
+        </Section>
 
-      {selectedDiffFile && diffPair && (
-        <div className="space-y-2">
-          {hasMergeConflictMarkers(diffPair.work) && (
-            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-rose-950/60 border border-rose-700/60 text-xs">
-              <div className="flex items-center gap-1.5 text-rose-200">
-                <AlertOctagon className="w-4 h-4 text-rose-400" />
-                <span>检测到合并冲突标记，一键点选解决：</span>
-              </div>
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => void handleResolveConflict('ours')}
-                  className="px-2 py-1 rounded bg-sky-700 text-white"
-                >
-                  采用当前
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleResolveConflict('theirs')}
-                  className="px-2 py-1 rounded bg-purple-700 text-white"
-                >
-                  采用传入
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleResolveConflict('both')}
-                  className="px-2 py-1 rounded bg-emerald-700 text-white"
-                >
-                  保留双方
-                </button>
-              </div>
-            </div>
-          )}
-          <UnifiedDiffViewer
-            filepath={selectedDiffFile}
-            oldText={diffPair.head}
-            newText={diffPair.work}
-          />
-        </div>
-      )}
-
-      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
-          <GitCommitHorizontal className="w-4 h-4 text-sky-400" />
-          <span>提交历史 ({commits.length})</span>
-        </div>
-        {commits.length === 0 ? (
-          <div className="text-xs text-slate-500">暂无提交记录</div>
-        ) : (
-          <div className="space-y-1.5 max-h-48 overflow-y-auto">
-            {commits.map((c) => (
-              <div
+        <Section
+          title="提交历史"
+          meta={<Badge>{commits.length}</Badge>}
+          bodyClassName="py-0"
+        >
+          {commits.length === 0 ? (
+            <div className="px-3 py-2.5 text-xs text-on-surface-variant">暂无提交记录</div>
+          ) : (
+            commits.map((c) => (
+              <ListRow
                 key={c.oid}
-                className="px-2.5 py-1.5 rounded bg-slate-950 flex items-center justify-between gap-2 text-xs"
-              >
-                <div className="truncate">
-                  <span className="font-mono text-amber-400 mr-2">{c.oid.slice(0, 7)}</span>
-                  <span className="text-slate-200">{c.message}</span>
-                </div>
-                <span className="text-[10px] text-slate-500 shrink-0">
-                  {new Date(c.timestamp).toLocaleTimeString()}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+                leading={<GitCommitHorizontal size={14} className="text-on-surface-variant" />}
+                title={c.message}
+                subtitle={`${new Date(c.timestamp).toLocaleString()} · ${c.oid.slice(0, 7)}`}
+                meta={null}
+              />
+            ))
+          )}
+        </Section>
       </div>
-    </div>
+
+      {/* Diff lives in a sheet so the mobile screen can actually show the change */}
+      <Sheet
+        open={diffOpen}
+        onClose={() => {
+          setSelectedDiffFile(null);
+          setDiffPair(null);
+        }}
+        title={selectedDiffFile?.split('/').pop()}
+        description={selectedDiffFile ?? undefined}
+        testId="git-diff-sheet"
+      >
+        {diffPair ? (
+          <div className="space-y-2 px-3 pb-4 pt-1">
+            {hasMergeConflictMarkers(diffPair.work) ? (
+              <div className="rounded-sm border border-error/40 bg-error-container/30 p-2.5">
+                <div className="mb-2 flex items-center gap-1.5 text-xs text-on-error-container">
+                  <AlertOctagon size={14} className="text-error" />
+                  检测到合并冲突标记，选择保留策略：
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <Button size="sm" variant="filled" onClick={() => void handleResolveConflict('ours')}>
+                    采用当前
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    onClick={() => void handleResolveConflict('theirs')}
+                  >
+                    采用传入
+                  </Button>
+                  <Button size="sm" variant="tonal" onClick={() => void handleResolveConflict('both')}>
+                    保留双方
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            <UnifiedDiffViewer
+              filepath={selectedDiffFile ?? undefined}
+              oldText={diffPair.head}
+              newText={diffPair.work}
+              maxHeightClass="max-h-[52vh]"
+            />
+            <div className="flex items-center gap-1.5 text-2xs text-on-surface-variant">
+              <ChevronRight size={12} />
+              左列为仓库版本行号，右列为工作区行号
+            </div>
+          </div>
+        ) : null}
+      </Sheet>
+    </Panel>
   );
 };

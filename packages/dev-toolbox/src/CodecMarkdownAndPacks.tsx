@@ -2,8 +2,19 @@ import React, { useMemo, useRef, useState } from 'react';
 import YAML from 'yaml';
 import { marked } from 'marked';
 import katex from 'katex';
-import { Upload, CheckCircle2, Trash2, Package } from 'lucide-react';
+import { Upload, CheckCircle2, Trash2, Package, X } from 'lucide-react';
 import type { ToolchainManager, ToolchainPackInfo } from '@pocketforge/runtime-bridge';
+import {
+  Badge,
+  Button,
+  Chip,
+  IconButton,
+  ListRow,
+  Notice,
+  Section,
+  TextArea,
+  TextInput,
+} from '@pocketforge/ui-kit';
 
 export const CodecRegexLabTab: React.FC = () => {
   const [dataInput, setDataInput] = useState(
@@ -11,8 +22,12 @@ export const CodecRegexLabTab: React.FC = () => {
   );
   const [dataOutput, setDataOutput] = useState('');
 
-  const [regexPattern, setRegexPattern] = useState('([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})');
-  const [regexSample, setRegexSample] = useState('联系邮箱: dev@pocketforge.io 或 team@android.local');
+  const [regexPattern, setRegexPattern] = useState(
+    '([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})'
+  );
+  const [regexSample, setRegexSample] = useState(
+    '联系邮箱: dev@pocketforge.io 或 team@android.local'
+  );
 
   const [jwtInput, setJwtInput] = useState(
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJwb2NrZXRmb3JnZS11c2VyIiwicm9sZSI6ImRldiIsImlhdCI6MTczMDYwMDAwMH0.signature'
@@ -27,7 +42,13 @@ export const CodecRegexLabTab: React.FC = () => {
         index: m.index ?? 0,
       }));
     } catch (err) {
-      return [{ full: `正则语法错误: ${err instanceof Error ? err.message : String(err)}`, groups: [], index: -1 }];
+      return [
+        {
+          full: `正则语法错误: ${err instanceof Error ? err.message : String(err)}`,
+          groups: [],
+          index: -1,
+        },
+      ];
     }
   }, [regexPattern, regexSample]);
 
@@ -44,14 +65,16 @@ export const CodecRegexLabTab: React.FC = () => {
   }, [jwtInput]);
 
   return (
-    <div className="space-y-4 text-xs">
-      {/* JSON <-> YAML & Base64 */}
-      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="font-semibold text-slate-200">JSON / YAML / Base64 转换器</span>
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
+    <div className="space-y-4">
+      <Section
+        title="JSON / YAML / Base64"
+        className="rounded-sm border border-outline-variant"
+        bodyClassName="px-2.5 pb-2.5 pt-2 space-y-2"
+        actions={
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => {
                 try {
                   setDataOutput(JSON.stringify(YAML.parse(dataInput), null, 2));
@@ -59,12 +82,12 @@ export const CodecRegexLabTab: React.FC = () => {
                   setDataOutput(String(e));
                 }
               }}
-              className="px-2 py-1 rounded bg-slate-800 hover:bg-sky-700 text-sky-300"
             >
-              格式化 JSON
-            </button>
-            <button
-              type="button"
+              格式化
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => {
                 try {
                   setDataOutput(YAML.stringify(YAML.parse(dataInput)));
@@ -72,12 +95,12 @@ export const CodecRegexLabTab: React.FC = () => {
                   setDataOutput(String(e));
                 }
               }}
-              className="px-2 py-1 rounded bg-slate-800 hover:bg-sky-700 text-amber-300"
             >
-              转为 YAML
-            </button>
-            <button
-              type="button"
+              转 YAML
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => {
                 try {
                   setDataOutput(btoa(unescape(encodeURIComponent(dataInput))));
@@ -85,67 +108,77 @@ export const CodecRegexLabTab: React.FC = () => {
                   setDataOutput(String(e));
                 }
               }}
-              className="px-2 py-1 rounded bg-slate-800 hover:bg-sky-700 text-emerald-300"
             >
-              Base64 编码
-            </button>
+              Base64
+            </Button>
           </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <textarea
-            rows={4}
+        }
+      >
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <TextArea
+            rows={5}
             value={dataInput}
             onChange={(e) => setDataInput(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-lg p-2 font-mono text-slate-200"
+            aria-label="输入内容"
           />
-          <textarea
-            rows={4}
+          <TextArea
+            rows={5}
             readOnly
             value={dataOutput}
-            placeholder="转换结果将显示在此处..."
-            className="bg-slate-950 border border-slate-800 rounded-lg p-2 font-mono text-emerald-300"
+            placeholder="转换结果…"
+            aria-label="转换结果"
+            className="text-success"
           />
         </div>
-      </div>
+      </Section>
 
-      {/* Regex Tester */}
-      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-        <div className="font-semibold text-slate-200">正则表达式实时高亮匹配实验室</div>
-        <input
-          type="text"
+      <Section
+        title="正则表达式"
+        meta={<Badge tone={regexMatches[0]?.index === -1 ? 'error' : 'neutral'}>{regexMatches.length} 处</Badge>}
+        className="rounded-sm border border-outline-variant"
+        bodyClassName="px-2.5 pb-2.5 pt-2 space-y-2"
+      >
+        <TextInput
           value={regexPattern}
           onChange={(e) => setRegexPattern(e.target.value)}
-          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 font-mono text-amber-300"
+          aria-label="正则表达式"
+          className="text-syntax-attribute"
         />
-        <input
-          type="text"
+        <TextInput
           value={regexSample}
           onChange={(e) => setRegexSample(e.target.value)}
-          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 font-mono text-slate-200"
+          aria-label="测试文本"
         />
         <div className="space-y-1">
           {regexMatches.map((m, idx) => (
-            <div key={idx} className="px-2 py-1 rounded bg-slate-950 font-mono text-[11px] text-sky-300">
-              匹配 #{idx + 1}: <span className="text-emerald-400">{m.full}</span>
-              {m.groups.length > 0 && <span className="text-slate-400 ml-2">分组: [{m.groups.join(', ')}]</span>}
+            <div
+              key={idx}
+              className="rounded-xs bg-surface-container-lowest px-2 py-1 font-mono text-2xs"
+            >
+              <span className="text-on-surface-variant">#{idx + 1} </span>
+              <span className="text-success">{m.full}</span>
+              {m.groups.length > 0 ? (
+                <span className="ml-2 text-on-surface-variant">[{m.groups.join(', ')}]</span>
+              ) : null}
             </div>
           ))}
         </div>
-      </div>
+      </Section>
 
-      {/* JWT Offline Decoder */}
-      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-        <div className="font-semibold text-slate-200">JWT 令牌离线解码器</div>
-        <input
-          type="text"
+      <Section
+        title="JWT 解码"
+        className="rounded-sm border border-outline-variant"
+        bodyClassName="px-2.5 pb-2.5 pt-2 space-y-2"
+      >
+        <TextInput
           value={jwtInput}
           onChange={(e) => setJwtInput(e.target.value)}
-          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 font-mono text-purple-300"
+          aria-label="JWT Token"
         />
-        <pre className="p-2.5 rounded-lg bg-slate-950 font-mono text-[11px] text-slate-200 overflow-x-auto">
+        <pre className="max-h-52 overflow-auto rounded-xs bg-surface-container-lowest p-2.5 font-mono text-2xs text-on-surface selectable">
           {decodedJwt}
         </pre>
-      </div>
+      </Section>
     </div>
   );
 };
@@ -167,24 +200,24 @@ export const MarkdownNoteTab: React.FC = () => {
   }, [mdSource]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs h-full">
-      <textarea
-        rows={12}
+    <div className="grid h-full grid-cols-1 gap-2 md:grid-cols-2">
+      <TextArea
+        rows={14}
         value={mdSource}
         onChange={(e) => setMdSource(e.target.value)}
-        className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 font-mono text-slate-100 outline-none"
+        aria-label="Markdown 源码"
+        className="h-full resize-none"
       />
-      <div
-        className="p-4 rounded-xl bg-slate-900 border border-slate-800 prose prose-invert max-w-none overflow-auto space-y-2"
-        dangerouslySetInnerHTML={{ __html: renderedHtml }}
-      />
+      <div className="overflow-auto rounded-sm border border-outline-variant bg-surface-container-low p-3.5 touch-scroll">
+        <div className="md-body" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
+      </div>
     </div>
   );
 };
 
 export const ToolchainManagerTab: React.FC<{ toolchains: ToolchainManager }> = ({ toolchains }) => {
   const [packs, setPacks] = useState<ToolchainPackInfo[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reload = async () => {
@@ -202,23 +235,26 @@ export const ToolchainManagerTab: React.FC<{ toolchains: ToolchainManager }> = (
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
       const info = await toolchains.importOfflinePack(file.name, buf);
-      setNotice(`已校验并导入离线工具链包: ${info.name} (SHA256 前缀 ${info.sha256?.slice(0, 10)})`);
+      setNotice({
+        text: `已校验并导入 ${info.name}（SHA256 前缀 ${info.sha256?.slice(0, 10)}）`,
+        error: false,
+      });
       await reload();
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice({ text: err instanceof Error ? err.message : String(err), error: true });
     }
   };
 
   return (
-    <div className="space-y-3 text-xs">
-      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-900 border border-slate-800">
-        <div>
-          <div className="font-semibold text-slate-100">模块化离线工具链包管理器 (.tar.zst / .tar.gz)</div>
-          <div className="text-[11px] text-slate-400">
-            按需挂载重型编译器以控制基础 APK 体积，断网环境支持直接从本地存储导入镜像包
+    <div className="space-y-3">
+      <div className="rounded-sm border border-outline-variant bg-surface-container-low p-3">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-on-surface">离线工具链包</div>
+            <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">
+              按需挂载重型编译器以控制基础体积；断网环境可从本地存储导入 .tar.zst / .tar.gz 镜像。
+            </p>
           </div>
-        </div>
-        <div>
           <input
             ref={fileInputRef}
             type="file"
@@ -226,83 +262,81 @@ export const ToolchainManagerTab: React.FC<{ toolchains: ToolchainManager }> = (
             onChange={handleFileImport}
             className="hidden"
           />
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="filled"
+            icon={<Upload size={13} />}
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold"
           >
-            <Upload className="w-3.5 h-3.5" />
-            <span>导入本地 .tar.zst 离线包</span>
-          </button>
+            导入
+          </Button>
         </div>
       </div>
 
-      {notice && (
-        <div className="px-3 py-2 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-200">
-          {notice}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-        {packs.map((pack) => (
-          <div
-            key={pack.id}
-            className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between gap-2"
+      {notice ? (
+        <div className="relative">
+          <Notice
+            tone={notice.error ? 'error' : 'success'}
+            actions={
+              <IconButton label="关闭提示" size="sm" onClick={() => setNotice(null)}>
+                <X size={13} />
+              </IconButton>
+            }
           >
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-100 flex items-center gap-1.5">
-                  <Package className="w-3.5 h-3.5 text-sky-400" />
-                  {pack.name}
-                </span>
-                <span className="text-[11px] font-mono text-slate-400">{pack.sizeMB} MB</span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">{pack.description}</p>
-              <div className="flex flex-wrap gap-1 pt-1">
-                {pack.binaries.map((bin) => (
-                  <span key={bin} className="px-1.5 py-0.5 rounded bg-slate-950 font-mono text-[10px] text-sky-300">
-                    {bin}
-                  </span>
-                ))}
-              </div>
-            </div>
+            {notice.text}
+          </Notice>
+        </div>
+      ) : null}
 
-            <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+      <div className="overflow-hidden rounded-sm border border-outline-variant">
+        {packs.map((pack) => (
+          <div key={pack.id} className="border-b border-outline-variant last:border-b-0">
+            <ListRow
+              leading={<Package size={15} className="text-primary" />}
+              title={pack.name}
+              subtitle={pack.description}
+              meta={`${pack.sizeMB} MB`}
+              trailing={
+                pack.bundled ? (
+                  <Badge tone="neutral">内置</Badge>
+                ) : pack.installed ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<Trash2 size={13} />}
+                    onClick={() => void toolchains.removePack(pack.id).then(reload)}
+                  >
+                    卸载
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="tonal"
+                    onClick={async () => {
+                      await toolchains.markPackInstalled(pack.id);
+                      setNotice({ text: `已挂载 ${pack.name}`, error: false });
+                      await reload();
+                    }}
+                  >
+                    挂载
+                  </Button>
+                )
+              }
+            />
+            <div className="flex flex-wrap items-center gap-1 px-3 pb-2">
               {pack.installed ? (
-                <span className="flex items-center gap-1 text-emerald-400 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>{pack.bundled ? '随底座内置' : '已离线挂载'}</span>
+                <span className="flex items-center gap-1 text-2xs text-success">
+                  <CheckCircle2 size={11} />
+                  {pack.bundled ? '随底座内置' : '已挂载'}
                 </span>
               ) : (
-                <span className="text-slate-500">未挂载</span>
+                <span className="text-2xs text-on-surface-variant">未挂载</span>
               )}
-
-              {!pack.bundled && (
-                <div>
-                  {pack.installed ? (
-                    <button
-                      type="button"
-                      onClick={() => void toolchains.removePack(pack.id).then(reload)}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-rose-900/50 text-rose-300"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>卸载释放空间</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await toolchains.markPackInstalled(pack.id);
-                        setNotice(`已挂载工具链包 ${pack.name}`);
-                        await reload();
-                      }}
-                      className="px-2.5 py-1 rounded bg-sky-600/25 border border-sky-500/40 hover:bg-sky-600/40 text-sky-300 font-medium"
-                    >
-                      一键激活挂载
-                    </button>
-                  )}
-                </div>
-              )}
+              {pack.binaries.map((bin) => (
+                <Chip key={bin} size="sm">
+                  <span className="font-mono">{bin}</span>
+                </Chip>
+              ))}
             </div>
           </div>
         ))}

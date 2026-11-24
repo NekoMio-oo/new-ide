@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { Send, BookmarkPlus, Clock } from 'lucide-react';
+import { Send, BookmarkPlus, Clock, X } from 'lucide-react';
+import {
+  Badge,
+  Button,
+  Chip,
+  IconButton,
+  Section,
+  SelectInput,
+  TextArea,
+  TextInput,
+} from '@pocketforge/ui-kit';
 
 interface SavedRequestItem {
   id: string;
@@ -59,10 +69,7 @@ export const MiniPostmanTab: React.FC = () => {
     const t0 = performance.now();
     try {
       const parsedHeaders = JSON.parse(headersJson || '{}') as Record<string, string>;
-      const init: RequestInit = {
-        method,
-        headers: parsedHeaders,
-      };
+      const init: RequestInit = { method, headers: parsedHeaders };
       if (method !== 'GET' && method !== 'HEAD' && body.trim()) {
         init.body = body;
       }
@@ -114,108 +121,108 @@ export const MiniPostmanTab: React.FC = () => {
     }
   };
 
-  return (
-    <div className="space-y-3 text-xs">
-      {/* Saved Collection Pills */}
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
-        {collection.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => {
-              setMethod(item.method);
-              setUrl(item.url);
-              setHeadersJson(item.headersJson);
-              setBody(item.body);
-            }}
-            className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-sky-500/50 text-slate-300 shrink-0"
-          >
-            <span className="font-mono text-sky-400 mr-1">{item.method}</span>
-            <span>{item.name}</span>
-          </button>
-        ))}
-      </div>
+  const ok = resp ? resp.status >= 200 && resp.status < 400 : false;
 
-      {/* Request Builder */}
-      <form onSubmit={handleSend} className="flex gap-1.5">
-        <select
+  return (
+    <div className="space-y-3">
+      {collection.length > 0 ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+          {collection.map((item) => (
+            <Chip
+              key={item.id}
+              className="max-w-[220px]"
+              onClick={() => {
+                setMethod(item.method);
+                setUrl(item.url);
+                setHeadersJson(item.headersJson);
+                setBody(item.body);
+              }}
+            >
+              <span className="font-mono text-primary">{item.method}</span>
+              <span className="truncate">{item.name}</span>
+            </Chip>
+          ))}
+        </div>
+      ) : null}
+
+      <form onSubmit={handleSend} className="flex items-center gap-1.5">
+        <SelectInput
+          size="sm"
+          aria-label="请求方法"
           value={method}
           onChange={(e) => setMethod(e.target.value)}
-          className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-2 font-mono text-sky-400 font-semibold"
+          containerClassName="w-[86px] shrink-0"
+          className="font-semibold text-primary"
         >
           {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
             <option key={m} value={m}>
               {m}
             </option>
           ))}
-        </select>
-        <input
-          type="text"
+        </SelectInput>
+        <TextInput
+          size="sm"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="http://127.0.0.1:8080/api/users"
-          className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 font-mono text-slate-100 outline-none focus:border-sky-500"
+          aria-label="请求地址"
+          containerClassName="min-w-0 flex-1"
         />
-        <button
-          type="button"
-          onClick={handleSaveCurrent}
-          className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-          title="保存到离线集合"
-        >
-          <BookmarkPlus className="w-4 h-4" />
-        </button>
-        <button
+        <IconButton label="保存到离线集合" size="sm" onClick={handleSaveCurrent}>
+          <BookmarkPlus size={14} />
+        </IconButton>
+        <Button
           type="submit"
+          size="sm"
+          variant="filled"
+          icon={<Send size={13} />}
           disabled={sending}
-          className="flex items-center gap-1 px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold shrink-0"
         >
-          <Send className="w-3.5 h-3.5" />
-          <span>发送</span>
-        </button>
+          发送
+        </Button>
       </form>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <div>
-          <label className="block text-[11px] text-slate-400 mb-1">Headers (JSON)</label>
-          <textarea
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        <TextArea
+          label="Headers (JSON)"
+          rows={3}
+          value={headersJson}
+          onChange={(e) => setHeadersJson(e.target.value)}
+        />
+        {method !== 'GET' ? (
+          <TextArea
+            label="Request Body"
             rows={3}
-            value={headersJson}
-            onChange={(e) => setHeadersJson(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 font-mono text-slate-200"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
           />
-        </div>
-        {method !== 'GET' && (
-          <div>
-            <label className="block text-[11px] text-slate-400 mb-1">Request Body</label>
-            <textarea
-              rows={3}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 font-mono text-slate-200"
-            />
-          </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Response Viewer */}
-      {resp && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/90 overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800">
-            <span
-              className={`font-mono font-semibold ${
-                resp.status >= 200 && resp.status < 400 ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              Status: {resp.status || 'ERR'}
-            </span>
-            <span className="flex items-center gap-1 text-slate-400">
-              <Clock className="w-3 h-3" />
+      {resp ? (
+        <Section
+          title="响应"
+          meta={
+            <Badge tone={ok ? 'success' : 'error'}>
+              {resp.status || 'ERR'}
+            </Badge>
+          }
+          actions={
+            <span className="flex items-center gap-1 font-mono text-2xs text-on-surface-variant">
+              <Clock size={11} />
               {resp.durationMs} ms
             </span>
-          </div>
-          <pre className="p-3 max-h-64 overflow-auto font-mono text-xs text-slate-200 whitespace-pre-wrap">
+          }
+          bodyClassName="py-0"
+        >
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-xs text-on-surface selectable">
             {resp.bodyText}
           </pre>
+        </Section>
+      ) : (
+        <div className="flex items-center gap-2 rounded-sm border border-dashed border-outline-variant px-3 py-4 text-xs text-on-surface-variant">
+          <X size={13} />
+          尚未发送请求
         </div>
       )}
     </div>

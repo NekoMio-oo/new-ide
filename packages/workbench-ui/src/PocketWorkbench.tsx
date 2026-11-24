@@ -12,6 +12,15 @@ import {
   X,
   Plus,
   Minus,
+  MoreVertical,
+  FileCode2,
+  FolderOpen,
+  Keyboard,
+  Sun,
+  Moon,
+  MonitorSmartphone,
+  ChevronRight,
+  Type,
 } from 'lucide-react';
 import type {
   DiagnosticLocation,
@@ -30,6 +39,23 @@ import { LivePreviewDevTools } from '@pocketforge/preview-devtools';
 import { GitWorkbenchPanel } from '@pocketforge/git-workbench';
 import { DevToolboxPanel } from '@pocketforge/dev-toolbox';
 import { AICopilotPanel, type ExternalAIRequest } from '@pocketforge/ai-copilot';
+import type { ThemeMode } from '@pocketforge/m3-theme';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  IconButton,
+  ListRow,
+  Section,
+  Sheet,
+  Snackbar,
+  Switch,
+  haptic,
+  useLongPress,
+  useOverflowFade,
+  useSoftKeyboard,
+  useTheme,
+} from '@pocketforge/ui-kit';
 import { FileExplorerDrawer } from './FileExplorerDrawer';
 
 export type BottomNavKey = 'editor' | 'terminal' | 'preview' | 'git' | 'toolbox' | 'ai';
@@ -39,15 +65,88 @@ interface PocketWorkbenchProps {
   sqlWasmUrl?: string;
 }
 
+const MIN_FONT = 11;
+const MAX_FONT = 22;
+
+const THEME_OPTIONS: Array<{ mode: ThemeMode; label: string; icon: React.ReactNode }> = [
+  { mode: 'dark', label: '深色', icon: <Moon size={13} /> },
+  { mode: 'light', label: '浅色', icon: <Sun size={13} /> },
+  { mode: 'system', label: '跟随系统', icon: <MonitorSmartphone size={13} /> },
+];
+
+/** Document tab with long-press affordance for tab actions. */
+const DocumentTab: React.FC<{
+  path: string;
+  active: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  onLongPress: () => void;
+}> = ({ path, active, onSelect, onClose, onLongPress }) => {
+  const name = path.split('/').pop() || path;
+  const { handlers, consumeSuppressedClick } = useLongPress(onLongPress);
+
+  return (
+    <div
+      role="tab"
+      aria-selected={active}
+      title={path}
+      {...handlers}
+      onClick={() => {
+        if (consumeSuppressedClick()) return;
+        onSelect();
+      }}
+      className={`no-select relative flex h-tabbar shrink-0 cursor-pointer items-center gap-1.5 border-r border-outline-variant/60 pl-3 pr-1 font-mono text-xs transition-colors duration-fast ${
+        active
+          ? 'bg-editor font-medium text-on-surface'
+          : 'text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface'
+      }`}
+    >
+      {active ? (
+        <span className="absolute inset-x-0 bottom-0 h-[2px] bg-primary" aria-hidden="true" />
+      ) : null}
+      <span className="max-w-[148px] truncate">{name}</span>
+      {active ? (
+        <button
+          type="button"
+          aria-label={`关闭 ${name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            haptic('tap');
+            onClose();
+          }}
+          className="press ml-0.5 flex h-6 w-6 items-center justify-center rounded-xs text-on-surface-variant hover:bg-on-surface/10 hover:text-on-surface"
+        >
+          <X size={12} />
+        </button>
+      ) : (
+        <span className="w-1.5" aria-hidden="true" />
+      )}
+    </div>
+  );
+};
+
 export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWasmUrl }) => {
   const editorRef = useRef<PocketEditorHandle | null>(null);
   const streamSeqRef = useRef(1);
   const aiSeqRef = useRef(1);
+  const splitRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ start: number; base: number; horizontal: boolean; extent: number } | null>(
+    null
+  );
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [navTab, setNavTab] = useState<BottomNavKey>('editor');
   const [splitPreview, setSplitPreview] = useState(false);
-  const [fontSize, setFontSize] = useState(14);
+  const [fontSize, setFontSize] = useState(13);
+  const [showKeybar, setShowKeybar] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tabMenuPath, setTabMenuPath] = useState<string | null>(null);
+  const [splitSize, setSplitSize] = useState(42);
+
+  const tabStrip = useOverflowFade<HTMLDivElement>(`editor:${navTab}`);
+
+  const { mode: themeMode, setMode: setThemeMode } = useTheme();
+  useSoftKeyboard();
 
   const [tree, setTree] = useState<FileNode[]>([]);
   const [openTabs, setOpenTabs] = useState<string[]>([
@@ -74,6 +173,15 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
     if (activeFilePath?.endsWith('.html')) return activeFilePath;
     if (activeProjectRoot) return `${activeProjectRoot}/index.html`;
     return 'web-nebula-app/index.html';
+  }, [activeFilePath, activeProjectRoot]);
+
+  const breadcrumb = useMemo(() => {
+    if (!activeFilePath) return { project: activeProjectRoot || '工作区', file: null as string | null };
+    const parts = activeFilePath.split('/');
+    return {
+      project: parts.length > 1 ? parts[0] : activeProjectRoot || '工作区',
+      file: parts[parts.length - 1],
+    };
   }, [activeFilePath, activeProjectRoot]);
 
   const refreshWorkspaceTree = useCallback(async () => {
@@ -123,13 +231,18 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
     setNavTab('editor');
   };
 
-  const handleCloseTab = (filepath: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCloseTab = (filepath: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     const next = openTabs.filter((t) => t !== filepath);
     setOpenTabs(next);
     if (activeFilePath === filepath) {
       setActiveFilePath(next[next.length - 1] ?? null);
     }
+  };
+
+  const handleCloseOtherTabs = (keepPath: string) => {
+    setOpenTabs([keepPath]);
+    setActiveFilePath(keepPath);
   };
 
   const handleEditorChange = (nextContent: string) => {
@@ -148,7 +261,7 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
     if (profile.ecosystem === 'web') {
       setSplitPreview(true);
       setNavTab('editor');
-      showToast(`已启动实时预览: ${profile.entryFile}`);
+      showToast(`已启动实时预览：${profile.entryFile}`);
       return;
     }
 
@@ -196,161 +309,187 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
     showToast(res.message);
   };
 
+  /** Drag the split divider — vertical in portrait, horizontal in landscape. */
+  const handleSplitDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const horizontal = window.innerWidth > window.innerHeight && window.innerHeight <= 560;
+    dragRef.current = {
+      start: horizontal ? event.clientX : event.clientY,
+      base: splitSize,
+      horizontal,
+      extent: horizontal
+        ? splitRef.current?.clientWidth ?? window.innerWidth
+        : splitRef.current?.clientHeight ?? window.innerHeight,
+    };
+  };
+
+  const handleSplitMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const current = drag.horizontal ? event.clientX : event.clientY;
+    const deltaPct = ((current - drag.start) / Math.max(1, drag.extent)) * 100;
+    setSplitSize(Math.min(75, Math.max(20, Math.round(drag.base + deltaPct))));
+  };
+
+  const handleSplitUp = () => {
+    dragRef.current = null;
+  };
+
   const bottomItems: Array<{ key: BottomNavKey; label: string; icon: React.ReactNode }> = [
-    { key: 'editor', label: '代码', icon: <Code2 className="w-4 h-4" /> },
-    { key: 'terminal', label: '终端', icon: <TerminalSquare className="w-4 h-4" /> },
-    { key: 'preview', label: '预览', icon: <Eye className="w-4 h-4" /> },
-    { key: 'git', label: 'Git', icon: <GitBranch className="w-4 h-4" /> },
-    { key: 'toolbox', label: '工具箱', icon: <Wrench className="w-4 h-4" /> },
-    { key: 'ai', label: 'AI 助手', icon: <Sparkles className="w-4 h-4" /> },
+    { key: 'editor', label: '代码', icon: <Code2 size={19} /> },
+    { key: 'terminal', label: '终端', icon: <TerminalSquare size={19} /> },
+    { key: 'preview', label: '预览', icon: <Eye size={19} /> },
+    { key: 'git', label: 'Git', icon: <GitBranch size={19} /> },
+    { key: 'toolbox', label: '工具箱', icon: <Wrench size={19} /> },
+    { key: 'ai', label: 'AI 助手', icon: <Sparkles size={19} /> },
   ];
 
   return (
-    <div className="flex flex-col h-dvh w-screen bg-slate-950 text-slate-100 overflow-hidden select-none">
-      {/* Top Mobile App Bar — pt-safe keeps it below the Android 15 edge-to-edge status bar */}
-      <header className="pt-safe flex items-center justify-between px-2.5 py-1.5 bg-slate-900 border-b border-slate-800 shrink-0 z-20">
-        <div className="flex items-center gap-2 min-w-0">
+    <div className="no-select relative flex h-dvh w-screen flex-col overflow-hidden bg-surface text-on-surface">
+      <div className="app-stage flex min-h-0 flex-1 flex-col">
+      {/* ── Top app bar: file context on the left, primary action on the right ── */}
+      <header className="shrink-0 bg-surface pt-safe">
+        <div className="flex h-appbar items-center gap-0.5 pl-1 pr-1.5">
+          <IconButton label="资源管理器" size="lg" onClick={() => setDrawerOpen(true)}>
+            <Menu size={19} />
+          </IconButton>
+
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
-            aria-label="打开文件树"
+            className="press flex min-w-0 flex-1 items-center gap-1 rounded-sm px-1 py-1 text-left"
+            title={activeFilePath ?? '工作区'}
           >
-            <Menu className="w-4 h-4" />
-          </button>
-          <div className="truncate">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold tracking-tight text-white">PocketForge</span>
-              <span
-                className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                  bridge.mode === 'android-native'
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'bg-sky-500/20 text-sky-300'
-                }`}
-              >
-                {bridge.mode === 'android-native' ? 'Linux Container' : 'Offline Core'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="hidden sm:flex items-center bg-slate-800 rounded-lg px-1">
-            <button
-              type="button"
-              onClick={() => setFontSize((s) => Math.max(11, s - 1))}
-              className="p-1 text-slate-300 hover:text-white"
-              title="缩小字号"
-            >
-              <Minus className="w-3 h-3" />
-            </button>
-            <span className="text-[10px] font-mono px-1 text-slate-400">{fontSize}</span>
-            <button
-              type="button"
-              onClick={() => setFontSize((s) => Math.min(22, s + 1))}
-              className="p-1 text-slate-300 hover:text-white"
-              title="放大字号"
-            >
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSplitPreview((v) => !v);
-              setNavTab('editor');
-            }}
-            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium ${
-              splitPreview
-                ? 'bg-sky-600/30 text-sky-300 border border-sky-500/50'
-                : 'bg-slate-800 text-slate-300'
-            }`}
-            title="上下分屏实时预览"
-          >
-            <Columns2 className="w-3.5 h-3.5" />
-            <span className="hidden xs:inline">分屏</span>
+            <FolderOpen size={13} className="shrink-0 text-on-surface-variant/80" />
+            <span className="app-header-title truncate font-mono text-xs text-on-surface-variant">
+              {breadcrumb.project}
+            </span>
+            {breadcrumb.file ? (
+              <>
+                <ChevronRight size={12} className="app-header-title shrink-0 text-on-surface-variant/50" />
+                <span className="truncate font-mono text-sm text-on-surface">{breadcrumb.file}</span>
+              </>
+            ) : null}
           </button>
 
-          <button
-            type="button"
+          {splitPreview ? (
+            <button
+              type="button"
+              title="关闭分屏预览"
+              onClick={() => {
+                haptic('tap');
+                setSplitPreview(false);
+              }}
+              className="press hidden shrink-0 items-center gap-1 rounded-xs bg-primary/12 px-1.5 py-0.5 font-mono text-2xs text-primary xs:flex"
+            >
+              分屏 ×
+            </button>
+          ) : null}
+
+          <Button
+            variant="filled"
+            size="sm"
+            icon={<Play size={14} className="fill-current" />}
+            className="ml-0.5 px-2.5 font-semibold"
             onClick={() => void handleRunActive()}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-semibold shadow-sm"
             data-testid="run-project-btn"
+            title={runProfiles[0] ? `运行 ${runProfiles[0].entryFile}` : '运行当前文件'}
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>运行</span>
-          </button>
+            <span className="hidden xs:inline">运行</span>
+          </Button>
+
+          <IconButton label="更多" size="lg" onClick={() => setMenuOpen(true)}>
+            <MoreVertical size={18} />
+          </IconButton>
         </div>
       </header>
 
-      {/* Open File Tabs Strip (shown in Editor mode) */}
-      {navTab === 'editor' && openTabs.length > 0 && (
-        <div className="flex items-center bg-slate-900/90 border-b border-slate-800 overflow-x-auto no-scrollbar shrink-0">
-          {openTabs.map((tabPath) => {
-            const name = tabPath.split('/').pop() || tabPath;
-            const active = tabPath === activeFilePath;
-            return (
-              <div
-                key={tabPath}
-                onClick={() => setActiveFilePath(tabPath)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs border-r border-slate-800/80 cursor-pointer shrink-0 ${
-                  active
-                    ? 'bg-[#0b1120] text-sky-300 border-b-2 border-b-sky-400 font-medium'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span className="font-mono">{name}</span>
-                <button
-                  type="button"
-                  onClick={(e) => handleCloseTab(tabPath, e)}
-                  className="p-0.5 rounded hover:bg-slate-800 text-slate-500 hover:text-slate-200"
+      {/* ── Document tabs ── */}
+      {navTab === 'editor' && openTabs.length > 0 ? (
+        <div
+          ref={tabStrip.ref}
+          className={`no-scrollbar flex h-tabbar shrink-0 items-stretch overflow-x-auto border-b border-outline-variant bg-surface-container ${
+            tabStrip.overflowing ? 'edge-fade' : ''
+          }`}
+          role="tablist"
+        >
+          {openTabs.map((tabPath) => (
+            <DocumentTab
+              key={tabPath}
+              path={tabPath}
+              active={tabPath === activeFilePath}
+              onSelect={() => setActiveFilePath(tabPath)}
+              onClose={() => handleCloseTab(tabPath)}
+              onLongPress={() => setTabMenuPath(tabPath)}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {/* ── Content stage ── */}
+      <main className="app-main relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {navTab === 'editor' ? (
+          <div
+            ref={splitRef}
+            className="split-pane flex h-full w-full flex-col overflow-hidden"
+            style={{ '--split-size': `${splitSize}%` } as React.CSSProperties}
+          >
+            {splitPreview ? (
+              <>
+                <div
+                  data-pane="preview"
+                  className="shrink-0 overflow-hidden border-b border-outline-variant"
+                  style={{ height: `${splitSize}%` }}
                 >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                  <LivePreviewDevTools fs={bridge.fs} entryHtmlPath={previewHtmlEntry} compact />
+                </div>
+                <div
+                  role="separator"
+                  aria-label="调整预览与编辑器比例"
+                  onPointerDown={handleSplitDown}
+                  onPointerMove={handleSplitMove}
+                  onPointerUp={handleSplitUp}
+                  onPointerCancel={handleSplitUp}
+                  className="split-handle group flex h-3 shrink-0 cursor-row-resize touch-none items-center justify-center bg-surface-container-low hover:bg-surface-container active:bg-primary/10"
+                >
+                  <span className="h-[3px] w-10 rounded-full bg-outline transition-colors group-hover:bg-on-surface-variant group-active:bg-primary" />
+                </div>
+              </>
+            ) : null}
 
-      {/* Toast Banner */}
-      {toastMsg && (
-        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-full bg-slate-900/95 border border-sky-500/50 text-xs text-sky-200 shadow-xl">
-          {toastMsg}
-        </div>
-      )}
-
-      {/* Main Content Stage */}
-      <main className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
-        {navTab === 'editor' && (
-          <div className="flex flex-col h-full w-full overflow-hidden">
-            {splitPreview && (
-              <div className="h-[42%] border-b-2 border-sky-900/70 shrink-0 overflow-hidden">
-                <LivePreviewDevTools fs={bridge.fs} entryHtmlPath={previewHtmlEntry} />
-              </div>
-            )}
-            <div className="flex-1 min-h-0">
+            <div className="min-h-0 flex-1">
               {activeFilePath ? (
                 <PocketCodeEditor
                   filepath={activeFilePath}
                   content={fileContent}
                   fontSize={fontSize}
+                  showKeybar={showKeybar}
                   onChange={handleEditorChange}
                   onQuickAIAction={handleQuickAIAction}
                   editorRef={editorRef}
                 />
               ) : (
-                <div className="flex items-center justify-center h-full text-xs text-slate-500">
-                  点击左上角菜单打开或新建文件
-                </div>
+                <EmptyState
+                  icon={<FileCode2 size={20} />}
+                  title="未打开文件"
+                  description="从资源管理器选择一个文件开始编辑，或从模板新建工程。"
+                  action={
+                    <Button
+                      variant="outlined"
+                      icon={<FolderOpen size={14} />}
+                      onClick={() => setDrawerOpen(true)}
+                    >
+                      打开资源管理器
+                    </Button>
+                  }
+                />
               )}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Keep Terminal mounted so PTY state & scrollback persist across tabs */}
-        <div className={navTab === 'terminal' ? 'flex-1 min-h-0 flex' : 'hidden'}>
+        <div className={navTab === 'terminal' ? 'flex min-h-0 flex-1' : 'hidden'}>
           <TerminalWorkbench
             bridge={bridge}
             projectRoot={activeProjectRoot}
@@ -362,56 +501,87 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
           />
         </div>
 
-        {navTab === 'preview' && (
-          <LivePreviewDevTools fs={bridge.fs} entryHtmlPath={previewHtmlEntry} />
-        )}
+        {navTab === 'preview' ? (
+          <div className="h-full animate-panel-in">
+            <LivePreviewDevTools fs={bridge.fs} entryHtmlPath={previewHtmlEntry} />
+          </div>
+        ) : null}
 
-        {navTab === 'git' && (
-          <GitWorkbenchPanel
-            bridge={bridge}
-            repoDir={activeProjectRoot}
-            onFileRestored={() => void loadActiveFile(activeFilePath)}
-          />
-        )}
+        {navTab === 'git' ? (
+          <div className="h-full animate-panel-in">
+            <GitWorkbenchPanel
+              bridge={bridge}
+              repoDir={activeProjectRoot}
+              onFileRestored={() => void loadActiveFile(activeFilePath)}
+            />
+          </div>
+        ) : null}
 
-        {navTab === 'toolbox' && <DevToolboxPanel bridge={bridge} sqlWasmUrl={sqlWasmUrl} />}
+        {navTab === 'toolbox' ? (
+          <div className="h-full animate-panel-in">
+            <DevToolboxPanel bridge={bridge} sqlWasmUrl={sqlWasmUrl} />
+          </div>
+        ) : null}
 
-        {navTab === 'ai' && (
-          <AICopilotPanel
-            activeFile={activeFilePath ? { filepath: activeFilePath, content: fileContent } : null}
-            externalRequest={externalAIReq}
-            onApplyCodePatch={async (targetPath, nextCode) => {
-              await bridge.fs.writeFile(targetPath, nextCode);
-              if (targetPath === activeFilePath) {
-                setFileContent(nextCode);
-              }
-              showToast(`已采纳 AI 内联补丁 -> ${targetPath}`);
-            }}
-          />
-        )}
+        {navTab === 'ai' ? (
+          <div className="h-full animate-panel-in">
+            <AICopilotPanel
+              activeFile={activeFilePath ? { filepath: activeFilePath, content: fileContent } : null}
+              externalRequest={externalAIReq}
+              onApplyCodePatch={async (targetPath, nextCode) => {
+                await bridge.fs.writeFile(targetPath, nextCode);
+                if (targetPath === activeFilePath) {
+                  setFileContent(nextCode);
+                }
+                showToast(`已采纳 AI 补丁 → ${targetPath}`);
+              }}
+            />
+          </div>
+        ) : null}
       </main>
+      </div>
 
-      {/* Thumb-Friendly Mobile Bottom Navigation Bar */}
-      <nav className="grid grid-cols-6 bg-slate-900 border-t border-slate-800 pb-safe shrink-0 z-20">
+      {/* ── Navigation bar (rail in landscape, see styles.css) ── */}
+      <nav className="app-nav flex shrink-0 items-stretch border-t border-outline-variant bg-surface-container-low pb-safe">
         {bottomItems.map((item) => {
           const active = navTab === item.key;
           return (
             <button
               key={item.key}
               type="button"
-              onClick={() => setNavTab(item.key)}
-              className={`flex flex-col items-center justify-center py-1.5 gap-0.5 text-[10px] transition-colors ${
-                active ? 'text-sky-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
+              aria-current={active ? 'page' : undefined}
+              title={item.label}
+              onClick={() => {
+                if (active) return;
+                haptic('select');
+                setNavTab(item.key);
+              }}
+              className="app-nav-item press flex flex-1 flex-col items-center justify-center gap-0.5 pb-1.5 pt-1"
             >
-              {item.icon}
-              <span>{item.label}</span>
+              <span
+                className={`flex h-7 w-12 items-center justify-center rounded-full transition-colors duration-fast ${
+                  active
+                    ? 'bg-primary/14 text-primary'
+                    : 'text-on-surface-variant group-hover:text-on-surface'
+                }`}
+              >
+                {item.icon}
+              </span>
+              <span
+                data-label
+                className={`text-2xs leading-none ${
+                  active ? 'font-semibold text-on-surface' : 'text-on-surface-variant'
+                }`}
+              >
+                {item.label}
+              </span>
             </button>
           );
         })}
       </nav>
 
-      {/* Slide-Over File Explorer Drawer */}
+      <Snackbar message={toastMsg} onDismiss={() => setToastMsg(null)} />
+
       <FileExplorerDrawer
         open={drawerOpen}
         tree={tree}
@@ -421,6 +591,157 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
         onClose={() => setDrawerOpen(false)}
         onRefresh={refreshWorkspaceTree}
       />
+
+      {/* ── Tab action sheet (long-press) ── */}
+      <Sheet
+        open={Boolean(tabMenuPath)}
+        onClose={() => setTabMenuPath(null)}
+        title={tabMenuPath?.split('/').pop()}
+        description={tabMenuPath ?? undefined}
+        testId="tab-actions-sheet"
+      >
+        <div className="px-1.5 pb-3">
+          <ListRow
+            leading={<X size={15} />}
+            title="关闭"
+            onClick={() => {
+              if (tabMenuPath) handleCloseTab(tabMenuPath);
+              setTabMenuPath(null);
+            }}
+          />
+          <ListRow
+            leading={<X size={15} />}
+            title="关闭其他标签"
+            onClick={() => {
+              if (tabMenuPath) handleCloseOtherTabs(tabMenuPath);
+              setTabMenuPath(null);
+            }}
+          />
+        </div>
+      </Sheet>
+
+      {/* ── Workspace / appearance sheet ── */}
+      <Sheet
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        title="工作区"
+        description={`${breadcrumb.project}${activeFilePath ? ` · ${openTabs.length} 个标签` : ''}`}
+        testId="workspace-sheet"
+      >
+        <div className="pb-2">
+          <Section
+            bodyClassName="py-0"
+            title="视图"
+          >
+            <ListRow
+              leading={<FolderOpen size={15} />}
+              title="资源管理器"
+              subtitle="浏览、新建文件与工程模板"
+              onClick={() => {
+                setMenuOpen(false);
+                setDrawerOpen(true);
+              }}
+            />
+            <ListRow
+              leading={<Columns2 size={15} />}
+              title="分屏预览"
+              subtitle="编辑器上方实时预览 Web 工程"
+              onClick={() => {
+                setSplitPreview((v) => {
+                  if (!v) setNavTab('editor');
+                  return !v;
+                });
+              }}
+              trailing={
+                <span onClick={(event) => event.stopPropagation()}>
+                  <Switch
+                    label="分屏预览"
+                    checked={splitPreview}
+                    onChange={(next) => {
+                      setSplitPreview(next);
+                      if (next) setNavTab('editor');
+                    }}
+                  />
+                </span>
+              }
+            />
+            <ListRow
+              leading={<Keyboard size={15} />}
+              title="辅助键盘"
+              subtitle="符号行与光标滑动面板"
+              onClick={() => setShowKeybar((v) => !v)}
+              trailing={
+                <span onClick={(event) => event.stopPropagation()}>
+                  <Switch label="辅助键盘" checked={showKeybar} onChange={setShowKeybar} />
+                </span>
+              }
+            />
+          </Section>
+
+          <Section title="编辑器">
+            <ListRow
+              leading={<Type size={15} />}
+              title="字号"
+              subtitle="仅影响代码编辑区"
+              trailing={
+                <div className="flex items-center gap-0.5">
+                  <IconButton
+                    label="缩小字号"
+                    size="sm"
+                    onClick={() => setFontSize((s) => Math.max(MIN_FONT, s - 1))}
+                  >
+                    <Minus size={13} />
+                  </IconButton>
+                  <span className="w-7 text-center font-mono text-sm text-on-surface">{fontSize}</span>
+                  <IconButton
+                    label="放大字号"
+                    size="sm"
+                    onClick={() => setFontSize((s) => Math.min(MAX_FONT, s + 1))}
+                  >
+                    <Plus size={13} />
+                  </IconButton>
+                </div>
+              }
+            />
+          </Section>
+
+          <Section title="外观">
+            <div className="flex gap-1.5 px-3 py-2.5">
+              {THEME_OPTIONS.map((option) => (
+                <Chip
+                  key={option.mode}
+                  icon={option.icon}
+                  selected={themeMode === option.mode}
+                  onClick={() => setThemeMode(option.mode)}
+                  size="lg"
+                  className="flex-1 justify-center"
+                >
+                  {option.label}
+                </Chip>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="运行环境">
+            <ListRow
+              leading={<TerminalSquare size={15} />}
+              title={bridge.mode === 'android-native' ? 'Linux 容器 (原生守护进程)' : '离线内核 (WASM)'}
+              subtitle={
+                bridge.mode === 'android-native'
+                  ? 'PTY、工具链与文件系统运行在设备本地'
+                  : '浏览器沙箱内核，无网络依赖'
+              }
+              trailing={
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    bridge.mode === 'android-native' ? 'bg-success' : 'bg-primary'
+                  }`}
+                />
+              }
+            />
+          </Section>
+        </div>
+      </Sheet>
     </div>
   );
 };

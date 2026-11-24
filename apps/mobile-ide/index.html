@@ -2,15 +2,27 @@
 <html lang="zh-CN" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <!-- interactive-widget lets the WebView resize for the soft keyboard instead of
+         panning the whole IDE; viewport-fit=cover enables edge-to-edge safe areas. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#121318" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>PocketForge IDE — 手机多功能离线开发环境</title>
+    <!-- Pre-JS paint only; the real scheme is injected by the token engine. -->
+    <style>
+      html {
+        background: #121318;
+      }
+      html.light {
+        background: #fbf8ff;
+      }
+    </style>
   </head>
-  <body class="bg-slate-950 text-slate-100 antialiased overflow-hidden">
+  <body class="overflow-hidden bg-surface text-on-surface antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

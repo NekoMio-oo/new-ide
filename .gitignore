@@ -9,3 +9,9 @@ build/
 apps/mobile-ide/android/.gradle/
 apps/mobile-ide/android/app/build/
 native-daemon/bin/
+
+# Local agent workspace notes / session caches
+.workbuddy/
+
+# Stray lockfile from ad-hoc `deno run` experiments; the project uses npm
+deno.lock

@@ -1,0 +1,61 @@
+/* PocketForge IDE — non-colour design tokens.
+ *
+ * Colour roles are NOT declared here: they are injected at boot from
+ * packages/m3-theme/src/tokens.ts (single source of truth) as
+ * `--m3-<role>: r g b` triplets, which keeps Tailwind's alpha modifiers working
+ * (rgb(var(--m3-primary) / 0.2)) and lets the editor/terminal canvases reuse the
+ * exact same values.
+ *
+ * This file owns everything structural: shape, spacing, type, motion, elevation
+ * and layout metrics shared by the shell and every panel.
+ */
+
+:root {
+  /* ── Shape scale ─────────────────────────────────────────────────────── */
+  --m3-shape-xs: 4px;
+  --m3-shape-sm: 6px;
+  --m3-shape-md: 8px;
+  --m3-shape-lg: 12px;
+  --m3-shape-xl: 16px;
+  --m3-shape-full: 999px;
+
+  /* ── Spacing (4dp grid) ──────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: 'Inter', 'Roboto', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ── Motion ──────────────────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+
+  /* ── Elevation (dark-tuned, used only for floating layers) ───────────── */
+  --elevation-1: 0 1px 2px rgb(0 0 0 / 0.28);
+  --elevation-2: 0 2px 8px rgb(0 0 0 / 0.32);
+  --elevation-3: 0 8px 24px rgb(0 0 0 / 0.38), 0 2px 6px rgb(0 0 0 / 0.24);
+  --elevation-sheet: 0 -8px 32px rgb(0 0 0 / 0.42);
+
+  /* ── Layout metrics ──────────────────────────────────────────────────── */
+  --appbar-h: 48px;
+  --tabbar-h: 34px;
+  --statusbar-h: 22px;
+  --navbar-h: 54px;
+  --rail-w: 56px;
+  --keybar-h: 32px;
+
+  /* ── Safe areas (edge-to-edge Android 15) ────────────────────────────── */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}

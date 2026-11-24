@@ -1,14 +1,31 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  ChevronRight,
   Folder,
   FolderOpen,
   FileCode2,
+  FileJson,
+  FileText,
+  FileImage,
+  FileTerminal,
+  File,
+  Database,
   FilePlus2,
   FolderPlus,
   Trash2,
   X,
   Layers,
 } from 'lucide-react';
+import {
+  Button,
+  IconButton,
+  ListRow,
+  Section,
+  Sheet,
+  TextInput,
+  haptic,
+  useLongPress,
+} from '@pocketforge/ui-kit';
 import {
   STARTER_TEMPLATES,
   type FileNode,
@@ -26,6 +43,99 @@ interface FileExplorerDrawerProps {
   onRefresh: () => Promise<void>;
 }
 
+/** Extension → icon + tone. Colours come from syntax tokens, never literals. */
+const fileVisual = (name: string): { icon: React.ReactNode; tone: string } => {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  const size = 14;
+
+  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext))
+    return { icon: <FileCode2 size={size} />, tone: 'text-syntax-number' };
+  if (['rs', 'go', 'java', 'kt', 'kts', 'c', 'h', 'cpp', 'cc', 'hpp', 'swift'].includes(ext))
+    return { icon: <FileCode2 size={size} />, tone: 'text-syntax-type' };
+  if (['py', 'rb', 'php', 'lua'].includes(ext))
+    return { icon: <FileCode2 size={size} />, tone: 'text-syntax-string' };
+  if (['html', 'htm', 'vue', 'svelte', 'css', 'scss', 'less'].includes(ext))
+    return { icon: <FileCode2 size={size} />, tone: 'text-syntax-tag' };
+  if (['json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'env'].includes(ext))
+    return { icon: <FileJson size={size} />, tone: 'text-syntax-attribute' };
+  if (['md', 'mdx', 'txt', 'rst'].includes(ext))
+    return { icon: <FileText size={size} />, tone: 'text-syntax-property' };
+  if (['sh', 'bash', 'zsh', 'fish'].includes(ext))
+    return { icon: <FileTerminal size={size} />, tone: 'text-syntax-function' };
+  if (['sql', 'db', 'sqlite'].includes(ext))
+    return { icon: <Database size={size} />, tone: 'text-syntax-meta' };
+  if (['png', 'jpg', 'jpeg', 'svg', 'webp', 'gif', 'ico'].includes(ext))
+    return { icon: <FileImage size={size} />, tone: 'text-syntax-meta' };
+  return { icon: <File size={size} />, tone: 'text-on-surface-variant' };
+};
+
+interface TreeRowProps {
+  node: FileNode;
+  depth: number;
+  expanded: boolean;
+  active: boolean;
+  onToggle: () => void;
+  onSelect: () => void;
+  onRequestDelete: () => void;
+}
+
+const TreeRow: React.FC<TreeRowProps> = ({
+  node,
+  depth,
+  expanded,
+  active,
+  onToggle,
+  onSelect,
+  onRequestDelete,
+}) => {
+  const visual = node.kind === 'directory' ? null : fileVisual(node.name);
+  const { handlers, consumeSuppressedClick } = useLongPress(onRequestDelete, 500);
+
+  return (
+    <button
+      type="button"
+      {...handlers}
+      onClick={() => {
+        if (consumeSuppressedClick()) return;
+        haptic('select');
+        if (node.kind === 'directory') onToggle();
+        else onSelect();
+      }}
+      className={`press flex h-8 w-full items-center gap-1.5 rounded-sm pr-1.5 text-left ${
+        active
+          ? 'bg-secondary-container/65 text-on-surface'
+          : 'text-on-surface-variant hover:bg-on-surface/[0.05]'
+      }`}
+      style={{ paddingLeft: 6 + depth * 12 }}
+    >
+      {node.kind === 'directory' ? (
+        <>
+          <ChevronRight
+            size={13}
+            className={`shrink-0 text-on-surface-variant/70 transition-transform duration-fast ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          />
+          {expanded ? (
+            <FolderOpen size={14} className="shrink-0 text-syntax-number" />
+          ) : (
+            <Folder size={14} className="shrink-0 text-syntax-number" />
+          )}
+          <span className="truncate text-sm font-medium text-on-surface">{node.name}</span>
+        </>
+      ) : (
+        <>
+          <span className="w-[13px] shrink-0" />
+          <span className={`shrink-0 ${visual!.tone}`}>{visual!.icon}</span>
+          <span className={`truncate font-mono text-sm ${active ? 'text-on-surface' : ''}`}>
+            {node.name}
+          </span>
+        </>
+      )}
+    </button>
+  );
+};
+
 export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
   open,
   tree,
@@ -42,6 +152,14 @@ export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
   const [creatingKind, setCreatingKind] = useState<'file' | 'dir' | null>(null);
   const [newPathInput, setNewPathInput] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<FileNode | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setCreatingKind(null);
+      setPendingDelete(null);
+      setShowTemplates(false);
+    }
+  }, [open]);
 
   if (!open) return null;
 
@@ -56,6 +174,7 @@ export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
     if (creatingKind === 'file') {
       await bridge.fs.writeFile(clean, '');
       onSelectFile(clean);
+      onClose();
     } else {
       await bridge.fs.mkdir(clean);
       setExpandedDirs((prev) => ({ ...prev, [clean]: true }));
@@ -73,6 +192,14 @@ export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
     setShowTemplates(false);
     await onRefresh();
     onSelectFile(tpl.defaultEntry);
+    onClose();
+  };
+
+  const handleDeleteConfirmed = async () => {
+    if (!pendingDelete) return;
+    await bridge.fs.deletePath(pendingDelete.path);
+    setPendingDelete(null);
+    await onRefresh();
   };
 
   const renderNode = (node: FileNode, depth = 0): React.ReactNode => {
@@ -80,166 +207,176 @@ export const FileExplorerDrawer: React.FC<FileExplorerDrawerProps> = ({
       const isExpanded = Boolean(expandedDirs[node.path]);
       return (
         <div key={node.path}>
-          <div
-            style={{ paddingLeft: `${depth * 14 + 8}px` }}
-            className="flex items-center justify-between pr-2 py-1.5 hover:bg-slate-800/70 rounded cursor-pointer text-xs text-slate-200 group"
-            onClick={() => toggleDir(node.path)}
-          >
-            <div className="flex items-center gap-1.5 truncate">
-              {isExpanded ? (
-                <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
-              ) : (
-                <Folder className="w-4 h-4 text-amber-400/80 shrink-0" />
-              )}
-              <span className="truncate font-medium">{node.name}</span>
-            </div>
-            <button
-              type="button"
-              onClick={async (e) => {
-                e.stopPropagation();
-                await bridge.fs.deletePath(node.path);
-                await onRefresh();
-              }}
-              className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400"
-              title="删除目录"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </div>
-          {isExpanded && node.children?.map((child) => renderNode(child, depth + 1))}
+          <TreeRow
+            node={node}
+            depth={depth}
+            expanded={isExpanded}
+            active={false}
+            onToggle={() => toggleDir(node.path)}
+            onSelect={() => undefined}
+            onRequestDelete={() => setPendingDelete(node)}
+          />
+          {isExpanded ? node.children?.map((child) => renderNode(child, depth + 1)) : null}
         </div>
       );
     }
 
-    const isActive = node.path === activeFilePath;
     return (
-      <div
+      <TreeRow
         key={node.path}
-        style={{ paddingLeft: `${depth * 14 + 12}px` }}
-        onClick={() => {
+        node={node}
+        depth={depth}
+        expanded={false}
+        active={node.path === activeFilePath}
+        onToggle={() => undefined}
+        onSelect={() => {
           onSelectFile(node.path);
           onClose();
         }}
-        className={`flex items-center justify-between pr-2 py-1.5 rounded cursor-pointer text-xs group ${
-          isActive
-            ? 'bg-sky-600/25 text-sky-300 border-l-2 border-sky-400'
-            : 'text-slate-300 hover:bg-slate-800/60'
-        }`}
-      >
-        <div className="flex items-center gap-1.5 truncate">
-          <FileCode2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-          <span className="truncate font-mono">{node.name}</span>
-        </div>
-        <button
-          type="button"
-          onClick={async (e) => {
-            e.stopPropagation();
-            await bridge.fs.deletePath(node.path);
-            await onRefresh();
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400"
-          title="删除文件"
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
-      </div>
+        onRequestDelete={() => setPendingDelete(node)}
+      />
     );
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex">
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-xs" onClick={onClose} />
+    <div className="fixed inset-0 z-40 flex" role="presentation">
+      <div className="absolute inset-0 animate-fade-in bg-scrim/50" onClick={onClose} aria-hidden="true" />
 
-      {/* Drawer Panel — pt-safe clears the edge-to-edge status bar overlay */}
-      <aside className="pt-safe relative z-10 w-72 max-w-[85vw] h-full bg-slate-900 border-r border-slate-800 flex flex-col text-slate-200 shadow-2xl">
-        <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-800">
-          <span className="text-xs font-bold tracking-wide uppercase text-slate-300">
-            离线工作区资源管理器
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => {
-                setCreatingKind('file');
-                setNewPathInput('web-nebula-app/newFile.js');
-              }}
-              className="p-1.5 rounded hover:bg-slate-800 text-slate-300"
-              title="新建文件"
-            >
-              <FilePlus2 className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setCreatingKind('dir');
-                setNewPathInput('my-project');
-              }}
-              className="p-1.5 rounded hover:bg-slate-800 text-slate-300"
-              title="新建文件夹"
-            >
-              <FolderPlus className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowTemplates((v) => !v)}
-              className="p-1.5 rounded hover:bg-slate-800 text-sky-400"
-              title="从多语言模板创建项目"
-            >
-              <Layers className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded hover:bg-slate-800 text-slate-400"
-            >
-              <X className="w-4 h-4" />
-            </button>
+      <aside
+        className="relative z-10 flex h-full w-80 max-w-[86vw] shrink-0 animate-drawer-in flex-col rounded-r-lg border-r border-outline-variant bg-surface-container-low pt-safe text-on-surface shadow-e3"
+        role="dialog"
+        aria-label="资源管理器"
+      >
+        {/* Drawer header — title + create actions, no decorative chrome */}
+        <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-outline-variant pl-3.5 pr-1">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-on-surface">资源管理器</div>
+            <div className="font-mono text-2xs text-on-surface-variant">离线工作区</div>
           </div>
+          <IconButton
+            label="新建文件"
+            size="sm"
+            onClick={() => {
+              setCreatingKind('file');
+              setNewPathInput('web-nebula-app/untitled.js');
+            }}
+          >
+            <FilePlus2 size={15} />
+          </IconButton>
+          <IconButton
+            label="新建文件夹"
+            size="sm"
+            onClick={() => {
+              setCreatingKind('dir');
+              setNewPathInput('my-project');
+            }}
+          >
+            <FolderPlus size={15} />
+          </IconButton>
+          <IconButton
+            label="工程模板"
+            size="sm"
+            active={showTemplates}
+            onClick={() => setShowTemplates((v) => !v)}
+          >
+            <Layers size={15} />
+          </IconButton>
+          <IconButton label="关闭资源管理器" size="sm" onClick={onClose}>
+            <X size={15} />
+          </IconButton>
         </div>
 
-        {creatingKind && (
-          <form onSubmit={handleCreateSubmit} className="p-2 bg-slate-950 border-b border-slate-800 flex gap-1.5">
-            <input
-              type="text"
+        {creatingKind ? (
+          <form
+            onSubmit={handleCreateSubmit}
+            className="shrink-0 animate-panel-in border-b border-outline-variant bg-surface px-2 py-2"
+          >
+            <TextInput
               autoFocus
               value={newPathInput}
               onChange={(e) => setNewPathInput(e.target.value)}
-              placeholder={creatingKind === 'file' ? 'dir/filename.ts' : 'folder-name'}
-              className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono"
+              placeholder={creatingKind === 'file' ? '目录/文件名.ts' : '文件夹名'}
+              aria-label={creatingKind === 'file' ? '新文件路径' : '新文件夹名称'}
             />
-            <button type="submit" className="px-2.5 py-1 rounded bg-sky-600 text-white text-xs">
-              创建
-            </button>
-          </form>
-        )}
-
-        {showTemplates && (
-          <div className="p-2.5 bg-slate-950 border-b border-slate-800 space-y-1.5 max-h-60 overflow-y-auto">
-            <div className="text-[11px] font-semibold text-sky-400">一键导入多语言工程模板：</div>
-            {STARTER_TEMPLATES.map((tpl) => (
-              <button
-                key={tpl.id}
-                type="button"
-                onClick={() => void handleSpawnTemplate(tpl)}
-                className="w-full text-left p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 space-y-0.5"
+            <div className="mt-1.5 flex items-center justify-end gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setCreatingKind(null);
+                  setNewPathInput('');
+                }}
               >
-                <div className="flex items-center justify-between text-xs font-medium text-slate-100">
-                  <span>{tpl.name}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-950 text-sky-300">
-                    {tpl.category}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400 line-clamp-2">{tpl.description}</p>
-              </button>
-            ))}
-          </div>
-        )}
+                取消
+              </Button>
+              <Button size="sm" variant="filled" type="submit">
+                创建
+              </Button>
+            </div>
+          </form>
+        ) : null}
 
-        <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
-          {tree.map((node) => renderNode(node, 0))}
+        {showTemplates ? (
+          <div className="max-h-[46%] shrink-0 overflow-y-auto border-b border-outline-variant bg-surface touch-scroll">
+            <Section title="多语言工程模板" bodyClassName="py-0">
+              {STARTER_TEMPLATES.map((tpl) => (
+                <ListRow
+                  key={tpl.id}
+                  leading={<FolderPlus size={14} />}
+                  title={tpl.name}
+                  subtitle={tpl.description}
+                  meta={tpl.category}
+                  onClick={() => void handleSpawnTemplate(tpl)}
+                />
+              ))}
+            </Section>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1 touch-scroll">
+          {tree.length === 0 ? (
+            <div className="px-3 py-6 text-center text-xs text-on-surface-variant">
+              工作区为空，先新建文件或导入模板。
+            </div>
+          ) : (
+            tree.map((node) => renderNode(node, 0))
+          )}
+        </div>
+
+        <div className="shrink-0 border-t border-outline-variant px-3 pt-2 pb-safe font-mono text-2xs text-on-surface-variant">
+          长按文件可删除
         </div>
       </aside>
+
+      {/* Delete confirmation sheet — destructive actions never fire on long-press alone */}
+      <Sheet
+        open={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(null)}
+        title={`删除${pendingDelete?.kind === 'directory' ? '文件夹' : '文件'}`}
+        description={pendingDelete?.path}
+        testId="delete-sheet"
+      >
+        <div className="px-3 pb-2 text-xs leading-relaxed text-on-surface-variant">
+          {pendingDelete?.kind === 'directory'
+            ? '该文件夹及其全部内容将从工作区移除，此操作无法撤销。'
+            : '该文件将从工作区移除，此操作无法撤销。'}
+        </div>
+        <div className="flex gap-2 px-3 pb-4 pt-1">
+          <Button variant="outlined" size="md" block onClick={() => setPendingDelete(null)}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            size="md"
+            block
+            icon={<Trash2 size={14} />}
+            hapticKind="warning"
+            onClick={() => void handleDeleteConfirmed()}
+          >
+            删除
+          </Button>
+        </div>
+      </Sheet>
     </div>
   );
 };
