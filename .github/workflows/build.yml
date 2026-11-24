@@ -149,28 +149,32 @@ jobs:
         with:
           path: artifacts
 
-      - name: Package offline web bundle
+      # Asset names follow the convention used by the existing v0.1.0 release.
+      # The daemon must be zipped: both ABIs are called libide_daemon.so, so
+      # uploading them individually makes the second one overwrite the first.
+      - name: Stage release assets
         run: |
           set -euo pipefail
-          cd artifacts/pocketforge-web-dist
-          zip -qr "$GITHUB_WORKSPACE/pocketforge-web-${{ github.ref_name }}.zip" .
-          cd "$GITHUB_WORKSPACE"
-          ls -lh pocketforge-web-${{ github.ref_name }}.zip
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
 
-      - name: Verify artifacts are non-empty
-        run: |
-          set -euo pipefail
-          test -n "$(find artifacts/pocketforge-android-debug-apk -name '*.apk' -size +1M -print -quit)"
-          test -n "$(find artifacts/libide-daemon-android -name 'libide_daemon.so' -size +1M -print -quit)"
+          apk="$(find artifacts/pocketforge-android-debug-apk -name '*.apk' -print -quit)"
+          test -n "$apk"
+          cp "$apk" "dist/PocketForge-IDE-${tag}-debug.apk"
+
+          (cd artifacts/pocketforge-web-dist && zip -qr "$GITHUB_WORKSPACE/dist/pocketforge-web-dist-${tag}.zip" .)
+          (cd artifacts/libide-daemon-android && zip -qr "$GITHUB_WORKSPACE/dist/libide-daemon-android-${tag}.zip" .)
+
+          # Guard against silently shipping empty/truncated artifacts.
+          test "$(stat -c%s "dist/PocketForge-IDE-${tag}-debug.apk")" -gt 5000000
+          test "$(stat -c%s "dist/libide-daemon-android-${tag}.zip")" -gt 1000000
+          test "$(stat -c%s "dist/pocketforge-web-dist-${tag}.zip")" -gt 500000
+          ls -lh dist
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: PocketForge ${{ github.ref_name }}
+          name: PocketForge ${GITHUB_REF_NAME}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: |
-            artifacts/pocketforge-android-debug-apk/*.apk
-            artifacts/libide-daemon-android/arm64-v8a/libide_daemon.so
-            artifacts/libide-daemon-android/x86_64/libide_daemon.so
-            pocketforge-web-${{ github.ref_name }}.zip
+          files: dist/*
