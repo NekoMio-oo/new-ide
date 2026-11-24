@@ -3,16 +3,23 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Superseded runs on the same ref are pointless; keep the newest one only.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   web:
     name: Web (typecheck, test, build)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +50,7 @@ jobs:
   daemon:
     name: Native daemon (test + cross-compile)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +86,7 @@ jobs:
   android-apk:
     name: Android APK (debug)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [web, daemon]
     steps:
       - uses: actions/checkout@v4
@@ -108,6 +117,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # Caches ~/.gradle (AGP, Kotlin, androidx) so the APK step stops
+      # re-downloading the whole toolchain on every run.
+      - uses: gradle/actions/setup-gradle@v4
+
       - name: Assemble debug APK
         working-directory: apps/mobile-ide/android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
@@ -118,3 +131,46 @@ jobs:
           name: pocketforge-android-debug-apk
           path: apps/mobile-ide/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [web, daemon, android-apk]
+    # Only tags publish; branch and PR runs stop at the artifacts above.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package offline web bundle
+        run: |
+          set -euo pipefail
+          cd artifacts/pocketforge-web-dist
+          zip -qr "$GITHUB_WORKSPACE/pocketforge-web-${{ github.ref_name }}.zip" .
+          cd "$GITHUB_WORKSPACE"
+          ls -lh pocketforge-web-${{ github.ref_name }}.zip
+
+      - name: Verify artifacts are non-empty
+        run: |
+          set -euo pipefail
+          test -n "$(find artifacts/pocketforge-android-debug-apk -name '*.apk' -size +1M -print -quit)"
+          test -n "$(find artifacts/libide-daemon-android -name 'libide_daemon.so' -size +1M -print -quit)"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PocketForge ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/pocketforge-android-debug-apk/*.apk
+            artifacts/libide-daemon-android/arm64-v8a/libide_daemon.so
+            artifacts/libide-daemon-android/x86_64/libide_daemon.so
+            pocketforge-web-${{ github.ref_name }}.zip
