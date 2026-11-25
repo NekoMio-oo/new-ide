@@ -136,6 +136,11 @@ func extractRootfsArchive(archivePath, destRoot string) error {
 		if nextErr != nil {
 			return nextErr
 		}
+		// Tarballs start with "./" for the root directory itself; skip it
+		// instead of treating it as an empty (and therefore unsafe) name.
+		if rel := strings.TrimPrefix(hdr.Name, "./"); rel == "" || rel == "." {
+			continue
+		}
 		target, pathErr := safeJoin(absRoot, hdr.Name)
 		if pathErr != nil {
 			return pathErr
