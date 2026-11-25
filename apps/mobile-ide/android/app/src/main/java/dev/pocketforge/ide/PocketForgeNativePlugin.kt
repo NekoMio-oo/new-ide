@@ -18,23 +18,33 @@ class PocketForgeNativePlugin : Plugin() {
 
     /**
      * Copies the bundled Alpine minirootfs for the primary ABI out of assets so
-     * the daemon can extract it without needing an AssetManager. Only re-copies
-     * when the asset is newer/larger, keeping startup cheap.
+     * the daemon can extract it without needing an AssetManager.
+     *
+     * Assets are deflated inside the APK, so `openFd()` is not usable here — it
+     * only opens uncompressed entries. Stream the bytes instead and stamp the
+     * copy with the app's versionCode so an upgraded APK refreshes it.
      */
+    @Suppress("DEPRECATION")
     private fun stageRootfs(abi: String): File? {
         val containerDir = File(context.filesDir, "container").apply { mkdirs() }
         val target = File(containerDir, "alpine-$abi.tgz")
+        val stamp = File(containerDir, "alpine-$abi.version")
         val assetPath = "rootfs/alpine-$abi.tgz"
+        val appVersion = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toString()
+        } catch (e: Exception) {
+            ""
+        }
         return try {
-            val expected = context.assets.openFd(assetPath).use { it.length }
-            if (target.exists() && target.length() == expected) {
-                target
-            } else {
+            val upToDate = target.exists() && target.length() > 1_000_000 &&
+                stamp.exists() && stamp.readText().trim() == appVersion
+            if (!upToDate) {
                 context.assets.open(assetPath).use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 }
-                target
+                stamp.writeText(appVersion)
             }
+            target
         } catch (e: Exception) {
             null
         }
