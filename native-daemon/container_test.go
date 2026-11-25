@@ -121,9 +121,26 @@ func TestEnsureRootfsWritesConfigAndMarker(t *testing.T) {
 		t.Errorf("apk repositories not configured: %q", repos)
 	}
 
+	// Absolute symlinks are rewritten relative to the rootfs: the kernel would
+	// otherwise resolve /bin/busybox against the host root and fail with
+	// `execve("/bin/sh"): No such file or directory` under proot.
+	link, err := os.Readlink(filepath.Join(rootfs, "bin", "sh"))
+	if err != nil {
+		t.Fatalf("readlink /bin/sh: %v", err)
+	}
+	if link != "busybox" {
+		t.Errorf("/bin/sh -> %q, want the relative target busybox", link)
+	}
+	if _, err := os.Stat(filepath.Join(rootfs, "bin", "sh")); err != nil {
+		t.Errorf("/bin/sh does not resolve after normalisation: %v", err)
+	}
+
 	// Second call must be a no-op rather than re-extracting.
 	if err := c.EnsureRootfs(); err != nil {
 		t.Fatalf("second EnsureRootfs: %v", err)
+	}
+	if again, _ := os.Readlink(filepath.Join(rootfs, "bin", "sh")); again != "busybox" {
+		t.Errorf("normalisation is not idempotent: %q", again)
 	}
 }
 

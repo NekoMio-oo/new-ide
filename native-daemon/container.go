@@ -3,12 +3,15 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ContainerConfig describes the proot-backed Alpine userland that replaces
@@ -29,6 +32,8 @@ type ContainerConfig struct {
 	GuestWork string
 	// Disabled forces the plain device shell even when the container is ready.
 	Disabled bool
+	// shellErr caches the result of the startup self-check ("" means healthy).
+	shellErr string
 }
 
 const (
@@ -58,25 +63,69 @@ func (c *ContainerConfig) Ready() bool {
 
 // EnsureRootfs extracts the bundled minirootfs once and writes the small
 // amount of configuration Alpine needs to be useful on Android (DNS, apk
-// mirror, shell profile). Safe to call on every start: it no-ops afterwards.
+// mirror, shell profile). Safe to call on every start: extraction no-ops once
+// the marker exists, while the symlink normalisation below always runs.
 func (c *ContainerConfig) EnsureRootfs() error {
 	if c == nil || c.Disabled || c.RootfsDir == "" {
 		return fmt.Errorf("container disabled")
 	}
-	if fileExists(filepath.Join(c.RootfsDir, rootfsMarker)) {
+	if !fileExists(filepath.Join(c.RootfsDir, rootfsMarker)) {
+		if c.ArchivePath == "" || !fileExists(c.ArchivePath) {
+			return fmt.Errorf("rootfs archive not found: %q", c.ArchivePath)
+		}
+		if err := os.MkdirAll(c.RootfsDir, 0o755); err != nil {
+			return err
+		}
+		if err := extractRootfsArchive(c.ArchivePath, c.RootfsDir); err != nil {
+			return fmt.Errorf("extract rootfs: %w", err)
+		}
+		c.writeRootfsConfig()
+		if err := os.WriteFile(filepath.Join(c.RootfsDir, rootfsMarker), []byte("alpine\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	// Always normalise, so installs provisioned by older builds get repaired
+	// without re-extracting (or re-downloading) the whole rootfs.
+	return c.fixAbsoluteSymlinks()
+}
+
+// fixAbsoluteSymlinks rewrites absolute symlink targets inside the rootfs to
+// relative ones.
+//
+// The kernel resolves a symlink target during execve/open, outside of proot's
+// syscall interception, so `/bin/sh -> /bin/busybox` would be looked up in the
+// *host* root. On Android that path does not exist and every shell dies with
+// `proot error: execve("/bin/sh"): No such file or directory`. Alpine's
+// minirootfs ships 310 such links, which is why proroot-based installers run
+// the same rewrite step after unpacking.
+func (c *ContainerConfig) fixAbsoluteSymlinks() error {
+	if !fileExists(c.RootfsDir) {
 		return nil
 	}
-	if c.ArchivePath == "" || !fileExists(c.ArchivePath) {
-		return fmt.Errorf("rootfs archive not found: %q", c.ArchivePath)
-	}
-	if err := os.MkdirAll(c.RootfsDir, 0o755); err != nil {
+	absRoot, err := filepath.Abs(c.RootfsDir)
+	if err != nil {
 		return err
 	}
-	if err := extractRootfsArchive(c.ArchivePath, c.RootfsDir); err != nil {
-		return fmt.Errorf("extract rootfs: %w", err)
-	}
-	c.writeRootfsConfig()
-	return os.WriteFile(filepath.Join(c.RootfsDir, rootfsMarker), []byte("alpine\n"), 0o644)
+	return filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, readErr := os.Readlink(path)
+		if readErr != nil || !strings.HasPrefix(target, "/") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(filepath.Dir(path), filepath.Join(absRoot, target))
+		if relErr != nil || rel == "" {
+			return nil
+		}
+		// Replacing the link is not atomic, but a crash mid-way only leaves a
+		// missing link, and the next start rewrites it again.
+		if err := os.Remove(path); err != nil {
+			return nil
+		}
+		_ = os.Symlink(rel, path)
+		return nil
+	})
 }
 
 func (c *ContainerConfig) writeRootfsConfig() {
@@ -88,10 +137,12 @@ func (c *ContainerConfig) writeRootfsConfig() {
 	_ = os.WriteFile(filepath.Join(c.RootfsDir, "etc", "apk", "repositories"),
 		[]byte(alpineMirror+"/main\n"+alpineMirror+"/community\n"), 0o644)
 
+	// busybox ash has no bash-style \[ \] escapes, so keep the prompt plain
+	// instead of leaking escape sequences into the terminal.
 	profile := `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 export LANG=C.UTF-8
-export PS1='\[\e[38;5;111m\]\u@alpine\[\e[0m\]:\[\e[38;5;180m\]\w\[\e[0m\]\$ '
+export PS1='\u@alpine:\w\$ '
 cd /workspace 2>/dev/null || cd /root
 `
 	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "etc", "profile.d"), 0o755)
@@ -308,6 +359,7 @@ func bootstrapCommand(bin string) string {
 type ContainerStatus struct {
 	Mode        string `json:"mode"` // "proot" or "device"
 	Ready       bool   `json:"ready"`
+	ShellOK     bool   `json:"shellOk"`
 	RootfsPath  string `json:"rootfsPath"`
 	ProotPath   string `json:"prootPath"`
 	AlpineVer   string `json:"alpineVersion"`
@@ -333,9 +385,14 @@ func (c *ContainerConfig) Status() ContainerStatus {
 	}
 	st.Mode = "proot"
 	st.Ready = true
+	st.ShellOK = c.shellErr == ""
 	if b, err := os.ReadFile(filepath.Join(c.RootfsDir, "etc", "alpine-release")); err == nil {
 		st.AlpineVer = strings.TrimSpace(string(b))
 		st.Detail = "Alpine " + st.AlpineVer + " · proot"
+	}
+	if c.shellErr != "" {
+		st.ShellOK = false
+		st.Detail = "容器自检失败：" + c.shellErr
 	}
 	if b, err := os.ReadFile(filepath.Join(c.RootfsDir, "usr", "lib", "node_modules", ".pocketforge-version")); err == nil {
 		st.NodeVersion = strings.TrimSpace(string(b))
@@ -353,4 +410,33 @@ func (c *ContainerConfig) WriteStatusSnapshot(path string) {
 		return
 	}
 	_ = os.WriteFile(path, payload, 0o644)
+}
+
+// Probe runs the container shell once so a broken rootfs surfaces in the UI
+// instead of only in the terminal. Returns "" when the shell works.
+func (c *ContainerConfig) Probe() string {
+	if !c.Ready() {
+		c.shellErr = "根文件系统未就绪"
+		return c.shellErr
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, c.ProotPath,
+		c.prootArgv(c.Workspace, []string{"/bin/sh", "-c", "exit 0"})...)
+	cmd.Env = append(os.Environ(), c.Env()...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		// Keep one line so the sheet stays readable.
+		if idx := strings.IndexByte(detail, '\n'); idx > 0 {
+			detail = detail[:idx]
+		}
+		c.shellErr = detail
+		return c.shellErr
+	}
+	c.shellErr = ""
+	return ""
 }

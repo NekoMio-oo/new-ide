@@ -760,9 +760,11 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
                 bridge.mode !== 'android-native'
                   ? '浏览器沙箱内核，无网络依赖'
                   : runtime?.mode === 'proot'
-                    ? runtime.nodeVersion
-                      ? `容器内 Node ${runtime.nodeVersion} · /workspace 已挂载`
-                      : '首次运行 node/python 时会在容器内自动安装'
+                    ? runtime.shellOk === false
+                      ? (runtime.detail ?? '容器自检未通过')
+                      : runtime.nodeVersion
+                        ? `容器内 Node ${runtime.nodeVersion} · /workspace 已挂载`
+                        : '首次运行 node/python 时会在容器内自动安装'
                     : (runtime?.detail ?? '正在检测容器…')
               }
               trailing={
@@ -770,7 +772,7 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
                   className={`h-1.5 w-1.5 rounded-full ${
                     bridge.mode !== 'android-native'
                       ? 'bg-primary'
-                      : runtime?.ready
+                      : runtime?.ready && runtime.shellOk !== false
                         ? 'bg-success'
                         : 'bg-warning'
                   }`}

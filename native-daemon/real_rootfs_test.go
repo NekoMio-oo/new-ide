@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,32 @@ func testRootfsArchive(t *testing.T, abi string) {
 			t.Errorf("missing %s: %v", rel, statErr)
 		}
 	}
+	// Mirror what the daemon does on every start: absolute targets must become
+	// relative, otherwise proot execve("/bin/sh") fails on device.
+	c := &ContainerConfig{RootfsDir: dest}
+	if err := c.fixAbsoluteSymlinks(); err != nil {
+		t.Fatalf("fixAbsoluteSymlinks: %v", err)
+	}
+	if err := filepath.WalkDir(dest, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, readErr := os.Readlink(p)
+		if readErr == nil && strings.HasPrefix(target, "/") {
+			rel, _ := filepath.Rel(dest, p)
+			t.Errorf("absolute symlink survived: %s -> %s", rel, target)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// busybox and the musl loader have to resolve after the rewrite.
+	for _, rel := range []string{"bin/sh", "lib/ld-musl-" + map[string]string{"arm64-v8a": "aarch64", "x86_64": "x86_64"}[abi] + ".so.1"} {
+		if _, statErr := os.Stat(filepath.Join(dest, rel)); statErr != nil {
+			t.Errorf("%s does not resolve after normalisation: %v", rel, statErr)
+		}
+	}
+
 	release, _ := os.ReadFile(filepath.Join(dest, "etc", "alpine-release"))
 	t.Logf("bundled rootfs reports Alpine %s", release)
 }

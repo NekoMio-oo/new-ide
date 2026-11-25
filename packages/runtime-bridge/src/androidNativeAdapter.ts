@@ -26,6 +26,8 @@ const DEFAULT_DAEMON_ORIGIN = 'http://127.0.0.1:19527';
 export interface ContainerRuntimeStatus {
   mode: 'proot' | 'device';
   ready: boolean;
+  /** Result of the daemon's startup `proot /bin/sh` self-check. */
+  shellOk?: boolean;
   alpineVersion?: string;
   nodeVersion?: string;
   detail?: string;
@@ -231,6 +233,7 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
       const raw = (await res.json()) as {
         mode?: string;
         ready?: boolean;
+        shellOk?: boolean;
         alpineVersion?: string;
         nodeVersion?: string;
         detail?: string;
@@ -239,6 +242,7 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
       this.containerStatus = {
         mode: raw.mode === 'proot' ? 'proot' : 'device',
         ready: Boolean(raw.ready),
+        shellOk: raw.shellOk,
         alpineVersion: raw.alpineVersion,
         nodeVersion: raw.nodeVersion,
         detail: raw.detail,

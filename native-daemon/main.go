@@ -50,6 +50,9 @@ func main() {
 	}
 
 	daemon := NewDaemonServer(wsDir, tcDir, time.Duration(*lspIdleSec)*time.Second, container)
+	if detail := container.Probe(); detail != "" {
+		log.Printf("[container] shell self-check failed: %s", detail)
+	}
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 	log.Printf("[PocketForge Daemon] listening on http://%s (workspace=%s, container=%s)", addr, wsDir, container.Status().Mode)
 
