@@ -130,46 +130,30 @@ func (m *PTYManager) Create(cwd string, cols, rows uint16) (*PTYSession, error) 
 	// Inside the proot/Alpine container the shell is always /bin/sh; on the
 	// bare device fall back to whatever sh the system provides.
 	inContainer := m.container.Ready()
-	var cmd *exec.Cmd
-	title := fmt.Sprintf("Linux Shell #%d", m.seq+1)
-	if inContainer {
-		argv := m.container.ShellArgv(workDir)
-		cmd = exec.Command(m.container.ProotPath, argv...)
-		title = fmt.Sprintf("Alpine Shell #%d", m.seq+1)
-	} else {
-		shellBin := os.Getenv("SHELL")
-		if shellBin == "" || !fileExists(shellBin) {
-			if resolved, err := exec.LookPath("sh"); err == nil {
-				shellBin = resolved
-			} else if fileExists("/system/bin/sh") {
-				shellBin = "/system/bin/sh"
-			} else {
-				shellBin = "/bin/sh"
-			}
-		}
-		cmd = exec.Command(shellBin)
+	title := fmt.Sprintf("Alpine Shell #%d", m.seq+1)
+	if !inContainer {
+		title = fmt.Sprintf("Linux Shell #%d", m.seq+1)
 	}
-	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"MAKEFLAGS=-j2",
-		"CARGO_BUILD_JOBS=2",
-	)
-	if inContainer {
-		cmd.Env = append(cmd.Env, m.container.Env()...)
-	}
-	cmd.Stdin = slave
-	cmd.Stdout = slave
-	cmd.Stderr = slave
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,
-		Setctty: true,
-	}
+	cmd := m.shellCommand(inContainer, workDir, slave)
 
 	if err := cmd.Start(); err != nil {
-		_ = slave.Close()
-		_ = ptmx.Close()
-		return nil, fmt.Errorf("start shell: %w", err)
+		if inContainer {
+			// proot can be refused by SELinux or by a kernel without ptrace;
+			// keep the terminal usable and say why the container is gone.
+			_, _ = ptmx.WriteString("\r\n[容器启动失败，已回退到设备 shell] " + err.Error() + "\r\n")
+			inContainer = false
+			title = fmt.Sprintf("Linux Shell #%d", m.seq+1)
+			cmd = m.shellCommand(false, workDir, slave)
+			if retryErr := cmd.Start(); retryErr != nil {
+				_ = slave.Close()
+				_ = ptmx.Close()
+				return nil, fmt.Errorf("start shell: %w", retryErr)
+			}
+		} else {
+			_ = slave.Close()
+			_ = ptmx.Close()
+			return nil, fmt.Errorf("start shell: %w", err)
+		}
 	}
 	// Parent closes slave fd after child inherits it
 	_ = slave.Close()
@@ -304,4 +288,38 @@ func (m *PTYManager) Kill(id string) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// shellCommand wires up either the container login shell or the device shell.
+func (m *PTYManager) shellCommand(inContainer bool, workDir string, slave *os.File) *exec.Cmd {
+	var cmd *exec.Cmd
+	if inContainer {
+		cmd = exec.Command(m.container.ProotPath, m.container.ShellArgv(workDir)...)
+	} else {
+		shellBin := os.Getenv("SHELL")
+		if shellBin == "" || !fileExists(shellBin) {
+			if resolved, err := exec.LookPath("sh"); err == nil {
+				shellBin = resolved
+			} else if fileExists("/system/bin/sh") {
+				shellBin = "/system/bin/sh"
+			} else {
+				shellBin = "/bin/sh"
+			}
+		}
+		cmd = exec.Command(shellBin)
+	}
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(),
+		"TERM=xterm-256color",
+		"MAKEFLAGS=-j2",
+		"CARGO_BUILD_JOBS=2",
+	)
+	if inContainer {
+		cmd.Env = append(cmd.Env, m.container.Env()...)
+	}
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	return cmd
 }
