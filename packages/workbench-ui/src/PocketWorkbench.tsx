@@ -23,6 +23,7 @@ import {
   Type,
 } from 'lucide-react';
 import type {
+  ContainerRuntimeStatus,
   DiagnosticLocation,
   FileNode,
   RunProfile,
@@ -142,11 +143,34 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
   const [menuOpen, setMenuOpen] = useState(false);
   const [tabMenuPath, setTabMenuPath] = useState<string | null>(null);
   const [splitSize, setSplitSize] = useState(42);
+  const [runtime, setRuntime] = useState<ContainerRuntimeStatus | null>(null);
 
   const tabStrip = useOverflowFade<HTMLDivElement>(`editor:${navTab}`);
 
   const { mode: themeMode, setMode: setThemeMode } = useTheme();
   useSoftKeyboard();
+
+  // Native mode runs a proroot/Alpine userland; the sheet reports its real
+  // state instead of a hard-coded "Linux 容器" label.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const probe = (
+      bridge as unknown as {
+        getContainerStatus?: (force?: boolean) => Promise<ContainerRuntimeStatus | null>;
+      }
+    ).getContainerStatus;
+    if (!probe) return;
+    let alive = true;
+    probe
+      .call(bridge, true)
+      .then((status) => {
+        if (alive && status) setRuntime(status);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [menuOpen, bridge]);
 
   const [tree, setTree] = useState<FileNode[]>([]);
   const [openTabs, setOpenTabs] = useState<string[]>([
@@ -725,16 +749,30 @@ export const PocketWorkbench: React.FC<PocketWorkbenchProps> = ({ bridge, sqlWas
           <Section title="运行环境">
             <ListRow
               leading={<TerminalSquare size={15} />}
-              title={bridge.mode === 'android-native' ? 'Linux 容器 (原生守护进程)' : '离线内核 (WASM)'}
+              title={
+                bridge.mode !== 'android-native'
+                  ? '离线内核 (WASM)'
+                  : runtime?.mode === 'proot'
+                    ? `Alpine ${runtime.alpineVersion ?? ''} · proot`.replace('  ', ' ')
+                    : '设备 shell（容器未启用）'
+              }
               subtitle={
-                bridge.mode === 'android-native'
-                  ? 'PTY、工具链与文件系统运行在设备本地'
-                  : '浏览器沙箱内核，无网络依赖'
+                bridge.mode !== 'android-native'
+                  ? '浏览器沙箱内核，无网络依赖'
+                  : runtime?.mode === 'proot'
+                    ? runtime.nodeVersion
+                      ? `容器内 Node ${runtime.nodeVersion} · /workspace 已挂载`
+                      : '首次运行 node/python 时会在容器内自动安装'
+                    : (runtime?.detail ?? '正在检测容器…')
               }
               trailing={
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
-                    bridge.mode === 'android-native' ? 'bg-success' : 'bg-primary'
+                    bridge.mode !== 'android-native'
+                      ? 'bg-primary'
+                      : runtime?.ready
+                        ? 'bg-success'
+                        : 'bg-warning'
                   }`}
                 />
               }

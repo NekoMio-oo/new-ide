@@ -15,3 +15,6 @@ native-daemon/bin/
 
 # Stray lockfile from ad-hoc `deno run` experiments; the project uses npm
 deno.lock
+
+# Compiled daemon binary from `go build ./...`
+/native-daemon/daemon

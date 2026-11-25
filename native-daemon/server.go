@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,15 +21,17 @@ type DaemonServer struct {
 	PTY          *PTYManager
 	LSP          *LSPSupervisor
 	Toolchains   *ToolchainStore
+	Container    *ContainerConfig
 }
 
-func NewDaemonServer(workspaceDir string, toolchainDir string, lspIdleTimeout time.Duration) *DaemonServer {
+func NewDaemonServer(workspaceDir string, toolchainDir string, lspIdleTimeout time.Duration, container *ContainerConfig) *DaemonServer {
 	_ = os.MkdirAll(workspaceDir, 0o755)
 	return &DaemonServer{
 		WorkspaceDir: workspaceDir,
-		PTY:          NewPTYManager(workspaceDir),
+		PTY:          NewPTYManager(workspaceDir, container),
 		LSP:          NewLSPSupervisor(lspIdleTimeout),
 		Toolchains:   NewToolchainStore(toolchainDir),
+		Container:    container,
 	}
 }
 
@@ -134,6 +138,93 @@ func (ds *DaemonServer) Handler() http.Handler {
 		<-done
 	})
 
+	mux.HandleFunc("/api/container", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, ds.Container.Status())
+	})
+
+	mux.HandleFunc("/api/container/provision", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if ds.Container == nil {
+			writeJSON(w, http.StatusOK, ContainerStatus{Mode: "device", Detail: "未配置容器"})
+			return
+		}
+		if err := ds.Container.EnsureRootfs(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		// Optional package list so the host can pre-install nodejs once.
+		var req struct {
+			Packages []string `json:"packages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Packages) > 0 && ds.Container.Ready() {
+			pkgs := strings.Join(req.Packages, " ")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			out := ds.runContainerCommand(ctx, "apk add --no-cache "+pkgs, ds.WorkspaceDir, nil)
+			if out.ExitCode != 0 {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"status": ds.Container.Status(),
+					"error":  strings.TrimSpace(out.Stderr + out.Stdout),
+				})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": ds.Container.Status()})
+	})
+
+	// The editor keeps its files in the WebView VFS, so the container has to be
+	// seeded before a run or a shell can see them. Paths are workspace-relative.
+	mux.HandleFunc("/api/fs/sync", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Dirs  []string `json:"dirs"`
+			Files []struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+				Base64  bool   `json:"base64"`
+			} `json:"files"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		written := 0
+		for _, d := range req.Dirs {
+			target, err := ds.workspacePath(d)
+			if err != nil {
+				continue
+			}
+			_ = os.MkdirAll(target, 0o755)
+		}
+		for _, f := range req.Files {
+			target, err := ds.workspacePath(f.Path)
+			if err != nil {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				continue
+			}
+			data := []byte(f.Content)
+			if f.Base64 {
+				if decoded, decErr := base64.StdEncoding.DecodeString(f.Content); decErr == nil {
+					data = decoded
+				}
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				continue
+			}
+			written++
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"written": written, "root": ds.WorkspaceDir})
+	})
+
 	mux.HandleFunc("/api/exec", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -154,52 +245,34 @@ func (ds *DaemonServer) Handler() http.Handler {
 		// the HTTP request forever with no way to kill it.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", req.Command)
-		cmd.Dir = ds.resolveInsideWorkspace(req.Cwd)
-		if req.Cwd != "" && !fileExists(cmd.Dir) {
-			cmd.Dir = ds.WorkspaceDir
-		}
-		// Run children in their own process group so the timeout kills the
-		// whole toolchain tree, not just the top-level shell.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			return nil
-		}
-		cmd.WaitDelay = 5 * time.Second
 
-		// Enforce Android Phantom Process Killer safe concurrency defaults
-		envList := append(os.Environ(),
-			"MAKEFLAGS=-j2",
-			"CARGO_BUILD_JOBS=2",
-			"GOMAXPROCS=2",
-		)
-		for k, v := range req.Env {
-			envList = append(envList, k+"="+v)
-		}
-		cmd.Env = envList
+		out := ds.runExec(ctx, req.Command, req.Cwd, req.Env)
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = 1
+		// Inside the container a missing interpreter is expected on first use
+		// (nodejs, python3, …): install it once and retry, instead of failing
+		// the run with a bare "not found".
+		bootstrapped := ""
+		if out.ExitCode == 127 && ds.Container.Ready() {
+			if cmd := bootstrapCommand(firstCommandToken(req.Command)); cmd != "" {
+				install := ds.runContainerCommand(ctx, cmd, ds.WorkspaceDir, req.Env)
+				out.Stdout += install.Stdout
+				out.Stderr += install.Stderr
+				if install.ExitCode == 0 {
+					bootstrapped = cmd
+					ds.recordToolVersion()
+					out = ds.runExec(ctx, req.Command, req.Cwd, req.Env)
+					out.Stdout = install.Stdout + out.Stdout
+				}
 			}
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"exitCode":   exitCode,
-			"stdout":     stdout.String(),
-			"stderr":     stderr.String(),
-			"durationMs": time.Since(t0).Milliseconds(),
+			"exitCode":     out.ExitCode,
+			"stdout":       out.Stdout,
+			"stderr":       out.Stderr,
+			"durationMs":   time.Since(t0).Milliseconds(),
+			"container":    ds.Container.Ready(),
+			"bootstrapped": bootstrapped,
 		})
 	})
 
@@ -276,4 +349,123 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// workspacePath validates a workspace-relative path (VFS sync payloads).
+func (ds *DaemonServer) workspacePath(rel string) (string, error) {
+	clean := filepath.Clean(strings.TrimPrefix(rel, "/"))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("invalid path: %q", rel)
+	}
+	target := filepath.Join(ds.WorkspaceDir, clean)
+	if target != ds.WorkspaceDir && !strings.HasPrefix(target, ds.WorkspaceDir+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes workspace: %q", rel)
+	}
+	return target, nil
+}
+
+type execResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+}
+
+// runExec executes a shell command either inside the Alpine container or with
+// the device shell, capturing both streams.
+func (ds *DaemonServer) runExec(ctx context.Context, command, cwd string, extraEnv map[string]string) execResult {
+	workDir := ds.resolveInsideWorkspace(cwd)
+	if cwd != "" && !fileExists(workDir) {
+		workDir = ds.WorkspaceDir
+	}
+
+	var cmd *exec.Cmd
+	inContainer := ds.Container.Ready()
+	if inContainer {
+		cmd = exec.CommandContext(ctx, ds.Container.ProotPath, ds.Container.ExecArgv(workDir, command)...)
+	} else {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	}
+	cmd.Dir = workDir
+
+	// Run children in their own process group so the timeout kills the whole
+	// toolchain tree, not just the top-level shell.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	cmd.WaitDelay = 5 * time.Second
+
+	// Enforce Android Phantom Process Killer safe concurrency defaults.
+	envList := append(os.Environ(),
+		"MAKEFLAGS=-j2",
+		"CARGO_BUILD_JOBS=2",
+		"GOMAXPROCS=2",
+	)
+	if inContainer {
+		envList = append(envList, ds.Container.Env()...)
+	}
+	for k, v := range extraEnv {
+		envList = append(envList, k+"="+v)
+	}
+	cmd.Env = envList
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	exitCode := 0
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+			if stderr.Len() == 0 {
+				stderr.WriteString(err.Error())
+			}
+		}
+	}
+	return execResult{ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String()}
+}
+
+// runContainerCommand always targets the container (used for apk bootstrap).
+func (ds *DaemonServer) runContainerCommand(ctx context.Context, command, cwd string, extraEnv map[string]string) execResult {
+	if !ds.Container.Ready() {
+		return execResult{ExitCode: 127, Stderr: "container not ready"}
+	}
+	return ds.runExec(ctx, command, cwd, extraEnv)
+}
+
+// firstCommandToken extracts the program name from a shell command line,
+// skipping leading VAR=value assignments and absolute paths.
+func firstCommandToken(command string) string {
+	for _, field := range strings.Fields(command) {
+		if strings.Contains(field, "=") && !strings.HasPrefix(field, "=") {
+			continue
+		}
+		field = strings.Trim(field, `"'`)
+		if idx := strings.LastIndex(field, "/"); idx >= 0 {
+			field = field[idx+1:]
+		}
+		return field
+	}
+	return ""
+}
+
+// recordToolVersion stores the container's node version so the UI can show it
+// without paying for an extra exec on every status poll.
+func (ds *DaemonServer) recordToolVersion() {
+	if !ds.Container.Ready() {
+		return
+	}
+	out := ds.runContainerCommand(context.Background(), "node -v", ds.WorkspaceDir, nil)
+	version := strings.TrimSpace(out.Stdout)
+	if out.ExitCode != 0 || version == "" {
+		return
+	}
+	target := filepath.Join(ds.Container.RootfsDir, "usr", "lib", "node_modules", ".pocketforge-version")
+	_ = os.MkdirAll(filepath.Dir(target), 0o755)
+	_ = os.WriteFile(target, []byte(version+"\n"), 0o644)
 }

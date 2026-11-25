@@ -15,8 +15,11 @@ import (
 )
 
 func TestPTYCreateWriteAndResize(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skip("/dev/ptmx unavailable in this environment")
+	}
 	tmp := t.TempDir()
-	mgr := NewPTYManager(tmp)
+	mgr := NewPTYManager(tmp, nil)
 
 	session, err := mgr.Create(tmp, 80, 24)
 	if err != nil {
@@ -49,7 +52,7 @@ func TestPTYCreateWriteAndResize(t *testing.T) {
 
 func TestDaemonExecAndPhantomProcessLimits(t *testing.T) {
 	tmp := t.TempDir()
-	ds := NewDaemonServer(tmp, filepath.Join(tmp, "tc"), 50*time.Millisecond)
+	ds := NewDaemonServer(tmp, filepath.Join(tmp, "tc"), 50*time.Millisecond, nil)
 	defer ds.LSP.Shutdown()
 
 	ts := httptest.NewServer(ds.Handler())

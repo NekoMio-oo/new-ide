@@ -95,16 +95,18 @@ type PTYSession struct {
 }
 
 type PTYManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*PTYSession
-	seq      int
-	rootDir  string
+	mu        sync.RWMutex
+	sessions  map[string]*PTYSession
+	seq       int
+	rootDir   string
+	container *ContainerConfig
 }
 
-func NewPTYManager(rootDir string) *PTYManager {
+func NewPTYManager(rootDir string, container *ContainerConfig) *PTYManager {
 	return &PTYManager{
-		sessions: make(map[string]*PTYSession),
-		rootDir:  rootDir,
+		sessions:  make(map[string]*PTYSession),
+		rootDir:   rootDir,
+		container: container,
 	}
 }
 
@@ -120,32 +122,42 @@ func (m *PTYManager) Create(cwd string, cols, rows uint16) (*PTYSession, error) 
 		return nil, err
 	}
 
-	// Android has no /bin/sh (only /system/bin/sh); the host app puts the
-	// toolchain bin dirs and /system/bin on PATH, so resolve via LookPath
-	// first and keep absolute paths as final fallbacks for desktop Linux.
-	shellBin := os.Getenv("SHELL")
-	if shellBin == "" || !fileExists(shellBin) {
-		if resolved, err := exec.LookPath("sh"); err == nil {
-			shellBin = resolved
-		} else if fileExists("/system/bin/sh") {
-			shellBin = "/system/bin/sh"
-		} else {
-			shellBin = "/bin/sh"
-		}
-	}
-
 	workDir := m.rootDir
 	if cwd != "" && fileExists(cwd) {
 		workDir = cwd
 	}
 
-	cmd := exec.Command(shellBin)
+	// Inside the proot/Alpine container the shell is always /bin/sh; on the
+	// bare device fall back to whatever sh the system provides.
+	inContainer := m.container.Ready()
+	var cmd *exec.Cmd
+	title := fmt.Sprintf("Linux Shell #%d", m.seq+1)
+	if inContainer {
+		argv := m.container.ShellArgv(workDir)
+		cmd = exec.Command(m.container.ProotPath, argv...)
+		title = fmt.Sprintf("Alpine Shell #%d", m.seq+1)
+	} else {
+		shellBin := os.Getenv("SHELL")
+		if shellBin == "" || !fileExists(shellBin) {
+			if resolved, err := exec.LookPath("sh"); err == nil {
+				shellBin = resolved
+			} else if fileExists("/system/bin/sh") {
+				shellBin = "/system/bin/sh"
+			} else {
+				shellBin = "/bin/sh"
+			}
+		}
+		cmd = exec.Command(shellBin)
+	}
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		"MAKEFLAGS=-j2",
 		"CARGO_BUILD_JOBS=2",
 	)
+	if inContainer {
+		cmd.Env = append(cmd.Env, m.container.Env()...)
+	}
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
@@ -167,7 +179,7 @@ func (m *PTYManager) Create(cwd string, cols, rows uint16) (*PTYSession, error) 
 	id := fmt.Sprintf("native-pty-%d", m.seq)
 	session := &PTYSession{
 		ID:    id,
-		Title: fmt.Sprintf("Linux Shell #%d", m.seq),
+		Title: title,
 		Cwd:   workDir,
 		Cols:  cols,
 		Rows:  rows,

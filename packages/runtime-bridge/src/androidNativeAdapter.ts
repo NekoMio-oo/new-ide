@@ -2,6 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 import { BrowserWasmRuntimeBridge } from './browserAdapter';
 import { parseCompilerDiagnostics } from './errorParser';
 import type {
+  FileNode,
   PTYProvider,
   PTYSessionInfo,
   RunProfile,
@@ -21,13 +22,43 @@ export const PocketForgeNative = registerPlugin<PocketForgeCapacitorPlugin>('Poc
 
 const DEFAULT_DAEMON_ORIGIN = 'http://127.0.0.1:19527';
 
+/** What the workspace sheet shows under 运行环境. */
+export interface ContainerRuntimeStatus {
+  mode: 'proot' | 'device';
+  ready: boolean;
+  alpineVersion?: string;
+  nodeVersion?: string;
+  detail?: string;
+  guestWork?: string;
+}
+
+/** Files bigger than this are not worth mirroring into the container. */
+const MAX_SYNC_FILE_BYTES = 2 * 1024 * 1024;
+
+const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|bmp|woff2?|ttf|otf|eot|wasm|zip|gz|tgz|zst|xz|apk|aar|jar|so|dylib|pdf|mp4|mp3)$/i;
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 class DaemonPTYProvider implements PTYProvider {
   private sockets = new Map<string, WebSocket>();
   private listeners = new Map<string, Set<(chunk: string) => void>>();
 
-  constructor(private daemonOrigin: string) {}
+  constructor(
+    private daemonOrigin: string,
+    private beforeCreate?: () => Promise<void>
+  ) {}
 
   async createSession(cwd = '', cols = 80, rows = 24): Promise<PTYSessionInfo> {
+    // The editor keeps files in the WebView VFS; mirror them first so `ls`
+    // inside the Alpine container shows the project the user is looking at.
+    await this.beforeCreate?.().catch(() => {});
     const res = await fetch(`${this.daemonOrigin}/api/pty`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -95,10 +126,12 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
   private daemonOrigin = DEFAULT_DAEMON_ORIGIN;
   private daemonPty: DaemonPTYProvider;
   private runnerImpl: RunnerProvider;
+  private lastSyncAt = 0;
+  private containerStatus: ContainerRuntimeStatus | null = null;
 
   constructor(daemonOrigin = DEFAULT_DAEMON_ORIGIN) {
     this.daemonOrigin = daemonOrigin;
-    this.daemonPty = new DaemonPTYProvider(daemonOrigin);
+    this.daemonPty = new DaemonPTYProvider(daemonOrigin, () => this.syncWorkspace());
     // Build the runner delegate ONCE. Returning a fresh object from a getter
     // broke React consumers that key useCallback/useEffect deps on
     // `bridge.runner` (e.g. PocketWorkbench loadActiveFile): every render got
@@ -115,6 +148,9 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
           active: true,
           title: `正在编译运行: ${profile.label}`,
         }).catch(() => {});
+
+        // The container can only execute files that exist on disk.
+        await this.syncWorkspace(true).catch(() => {});
 
         try {
           const res = await fetch(`${this.daemonOrigin}/api/exec`, {
@@ -178,10 +214,87 @@ export class AndroidNativeRuntimeBridge implements RuntimeBridge {
       const info = await PocketForgeNative.startDaemon();
       if (info.port) {
         this.daemonOrigin = `http://127.0.0.1:${info.port}`;
-        this.daemonPty = new DaemonPTYProvider(this.daemonOrigin);
+        this.daemonPty = new DaemonPTYProvider(this.daemonOrigin, () => this.syncWorkspace());
       }
     } catch {
       // Daemon already started externally on 127.0.0.1:19527
+    }
+    await this.getContainerStatus().catch(() => null);
+  }
+
+  /** Actual proot/Alpine state, used by the workspace sheet. */
+  async getContainerStatus(force = false): Promise<ContainerRuntimeStatus | null> {
+    if (this.containerStatus && !force) return this.containerStatus;
+    try {
+      const res = await fetch(`${this.daemonOrigin}/api/container`);
+      if (!res.ok) return this.containerStatus;
+      const raw = (await res.json()) as {
+        mode?: string;
+        ready?: boolean;
+        alpineVersion?: string;
+        nodeVersion?: string;
+        detail?: string;
+        guestWork?: string;
+      };
+      this.containerStatus = {
+        mode: raw.mode === 'proot' ? 'proot' : 'device',
+        ready: Boolean(raw.ready),
+        alpineVersion: raw.alpineVersion,
+        nodeVersion: raw.nodeVersion,
+        detail: raw.detail,
+        guestWork: raw.guestWork,
+      };
+      return this.containerStatus;
+    } catch {
+      return this.containerStatus;
+    }
+  }
+
+  /**
+   * Mirrors the WebView VFS into the daemon workspace so the Alpine container
+   * (and a real `node`/`python3`) can see the project. Throttled because it
+   * runs before every shell session and every run.
+   */
+  async syncWorkspace(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.lastSyncAt < 1500) return;
+
+    const dirs: string[] = [];
+    const files: Array<{ path: string; content: string; base64?: boolean }> = [];
+
+    const walk = async (nodes: FileNode[]): Promise<void> => {
+      for (const node of nodes) {
+        if (node.kind === 'directory') {
+          dirs.push(node.path);
+          await walk(node.children ?? []);
+          continue;
+        }
+        try {
+          if (BINARY_EXT.test(node.path)) {
+            if (node.size > MAX_SYNC_FILE_BYTES) continue;
+            const bytes = await this.fallback.fs.readBinaryFile(node.path);
+            files.push({ path: node.path, content: toBase64(bytes), base64: true });
+          } else {
+            const text = await this.fallback.fs.readFile(node.path);
+            if (text.length > MAX_SYNC_FILE_BYTES) continue;
+            files.push({ path: node.path, content: text });
+          }
+        } catch {
+          // Unreadable entries are skipped rather than failing the whole sync.
+        }
+      }
+    };
+
+    try {
+      await walk(await this.fallback.fs.listTree());
+      const res = await fetch(`${this.daemonOrigin}/api/fs/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dirs, files }),
+      });
+      if (res.ok) this.lastSyncAt = now;
+    } catch {
+      // Daemon not reachable yet (still booting) — the next call retries.
     }
   }
 

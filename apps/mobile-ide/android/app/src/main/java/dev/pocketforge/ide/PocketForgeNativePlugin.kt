@@ -16,30 +16,83 @@ class PocketForgeNativePlugin : Plugin() {
     private var daemonProcess: Process? = null
     private val daemonPort = 19527
 
+    /**
+     * Copies the bundled Alpine minirootfs for the primary ABI out of assets so
+     * the daemon can extract it without needing an AssetManager. Only re-copies
+     * when the asset is newer/larger, keeping startup cheap.
+     */
+    private fun stageRootfs(abi: String): File? {
+        val containerDir = File(context.filesDir, "container").apply { mkdirs() }
+        val target = File(containerDir, "alpine-$abi.tgz")
+        val assetPath = "rootfs/alpine-$abi.tgz"
+        return try {
+            val expected = context.assets.openFd(assetPath).use { it.length }
+            if (target.exists() && target.length() == expected) {
+                target
+            } else {
+                context.assets.open(assetPath).use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                target
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun primaryAbi(): String {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        return when (abi) {
+            "arm64-v8a", "x86_64" -> abi
+            // 32-bit devices cannot run the 64-bit proot/Alpine userland; the
+            // daemon then falls back to the device shell.
+            else -> ""
+        }
+    }
+
     @PluginMethod
     fun startDaemon(call: PluginCall) {
         try {
             val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
             val toolchainsDir = File(context.filesDir, "toolchains").apply { mkdirs() }
+            val containerDir = File(context.filesDir, "container").apply { mkdirs() }
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
             val daemonBin = File(nativeLibDir, "libide_daemon.so")
 
             if (daemonProcess?.isAlive != true && daemonBin.exists()) {
-                val pb = ProcessBuilder(
+                val abi = primaryAbi()
+                val rootfsArchive = if (abi.isNotEmpty()) stageRootfs(abi) else null
+                val prootBin = File(nativeLibDir, "libproot.so")
+
+                val cmd = mutableListOf(
                     daemonBin.absolutePath,
                     "--port", daemonPort.toString(),
                     "--workspace", workspaceDir.absolutePath,
-                    "--toolchains", toolchainsDir.absolutePath
+                    "--toolchains", toolchainsDir.absolutePath,
+                    "--rootfs", File(containerDir, "alpine").absolutePath
                 )
+                if (rootfsArchive != null && prootBin.exists()) {
+                    cmd += listOf(
+                        "--rootfs-archive", rootfsArchive.absolutePath,
+                        "--proot", prootBin.absolutePath,
+                        "--proot-libs", nativeLibDir,
+                        "--container", "auto"
+                    )
+                } else {
+                    cmd += listOf("--container", "off")
+                }
+
+                val pb = ProcessBuilder(cmd)
                 pb.directory(workspaceDir)
                 pb.environment()["HOME"] = context.filesDir.absolutePath
                 pb.environment()["PATH"] = "${toolchainsDir.absolutePath}/bin:/system/bin:/usr/bin"
+                pb.environment()["LD_LIBRARY_PATH"] = nativeLibDir
                 daemonProcess = pb.start()
             }
 
             val ret = JSObject().apply {
                 put("port", daemonPort)
-                put("rootfsPath", workspaceDir.absolutePath)
+                put("rootfsPath", File(containerDir, "alpine").absolutePath)
                 put("status", if (daemonProcess?.isAlive == true) "running" else "standby")
             }
             call.resolve(ret)
