@@ -86,6 +86,7 @@ func (c *ContainerConfig) EnsureRootfs() error {
 	}
 	// Always normalise, so installs provisioned by older builds get repaired
 	// without re-extracting (or re-downloading) the whole rootfs.
+	c.writeShellProfile()
 	return c.fixAbsoluteSymlinks()
 }
 
@@ -136,9 +137,15 @@ func (c *ContainerConfig) writeRootfsConfig() {
 	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "etc", "apk"), 0o755)
 	_ = os.WriteFile(filepath.Join(c.RootfsDir, "etc", "apk", "repositories"),
 		[]byte(alpineMirror+"/main\n"+alpineMirror+"/community\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "workspace"), 0o755)
+	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "tmp"), 0o1777)
+}
 
-	// busybox ash has no bash-style \[ \] escapes, so keep the prompt plain
-	// instead of leaking escape sequences into the terminal.
+// writeShellProfile is rewritten on every start so prompt and PATH changes
+// reach devices provisioned by an older build (the rootfs itself is only
+// extracted once). busybox ash has no bash-style \[ \] escapes, so the prompt
+// stays plain instead of leaking escape sequences into the terminal.
+func (c *ContainerConfig) writeShellProfile() {
 	profile := `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 export LANG=C.UTF-8
@@ -150,8 +157,6 @@ cd /workspace 2>/dev/null || cd /root
 		[]byte(profile), 0o644)
 	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "root"), 0o755)
 	_ = os.WriteFile(filepath.Join(c.RootfsDir, "root", ".profile"), []byte(profile), 0o644)
-	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "workspace"), 0o755)
-	_ = os.MkdirAll(filepath.Join(c.RootfsDir, "tmp"), 0o1777)
 }
 
 // extractRootfsArchive unpacks a minirootfs tarball with symlink support.
